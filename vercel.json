@@ -1,0 +1,44 @@
+{
+  "version": 2,
+  "build": {
+    "env": {
+      "GHOSTSCRIPT_PATH": "/opt/vercel/ghostscript/bin/gs"
+    }
+  },
+  "builds": [
+    {
+      "src": "server/server.js",
+      "use": "@vercel/node",
+      "config": {
+        "installCommand": "curl -L https://github.com/ArtifexSoftware/ghostpdl-downloads/releases/download/gs1000/ghostscript-10.0.0-linux-x86_64.tgz | tar xz && mv ghostscript-10.0.0-linux-x86_64 /opt/vercel/ghostscript && npm install"
+      }
+    },
+    {
+      "src": "public/**",
+      "use": "@vercel/static"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/compress",
+      "dest": "server/server.js"
+    },
+    {
+      "src": "/download/(.*)",
+      "dest": "server/server.js"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "public/$1"
+    }
+  ],
+  "env": {
+    "NODE_ENV": "production"
+  },
+  "functions": {
+    "server/server.js": {
+      "memory": 1024,
+      "maxDuration": 60
+    }
+  }
+} 

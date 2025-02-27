@@ -18,7 +18,7 @@ app.use(express.static('public'));
 // 配置文件上传
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-        cb(null, 'uploads/');
+        cb(null, '/tmp/');  // Vercel 只允许写入 /tmp 目录
     },
     filename: (req, file, cb) => {
         cb(null, Date.now() + path.extname(file.originalname));
@@ -39,6 +39,11 @@ const upload = multer({
         }
     }
 });
+
+// 设置 Ghostscript 路径
+if (process.env.GHOSTSCRIPT_PATH) {
+    gs.setGhostscriptPath(process.env.GHOSTSCRIPT_PATH);
+}
 
 // 使用 Ghostscript 压缩 PDF
 async function compressPDFWithGhostscript(inputPath, outputPath, compressionLevel) {
@@ -260,7 +265,7 @@ app.post('/compress', upload.single('file'), async (req, res) => {
 
         const file = req.file;
         const compressionLevel = req.body.compressionLevel || 'medium';
-        const outputPath = path.join('uploads', `compressed_${file.filename}`);
+        const outputPath = path.join('/tmp', `compressed_${file.filename}`);
 
         console.log('File received:', {
             originalname: file.originalname,
@@ -309,13 +314,13 @@ app.post('/compress', upload.single('file'), async (req, res) => {
 
 // 文件下载路由
 app.get('/download/:filename', (req, res) => {
-    const file = path.join(__dirname, '../uploads', req.params.filename);
+    const file = path.join('/tmp', req.params.filename);
     res.download(file);
 });
 
 // 定期清理上传的文件
 function cleanupUploads() {
-    const uploadsDir = path.join(__dirname, '../uploads');
+    const uploadsDir = '/tmp';
     fs.readdir(uploadsDir, (err, files) => {
         if (err) throw err;
 
