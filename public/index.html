@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Compress EPUB</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23007AFF' d='M12 3L20 13H4L12 3M12 6L7.8 11H16.2L12 6M4 15H20V19H4V15Z'/></svg>">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Compress EPUB</h1>
+            <p class="subtitle">Compress your EPUB files easily</p>
+        </header>
+
+        <!-- 上传区域 -->
+        <div class="upload-area" id="dropZone">
+            <input type="file" id="fileInput" accept=".pdf,.epub" hidden>
+            <div class="upload-content">
+                <svg class="upload-icon" viewBox="0 0 24 24" width="48" height="48">
+                    <path d="M12 3L20 13H4L12 3M12 6L7.8 11H16.2L12 6M4 15H20V19H4V15Z"/>
+                </svg>
+                <p>Drag & drop your e-book here<br>or <span class="browse-text">browse files</span></p>
+                <p class="supported-formats">Supported formats: PDF, EPUB</p>
+                <p class="file-info" id="fileInfo"></p>
+            </div>
+        </div>
+
+        <!-- 压缩选项 -->
+        <div class="compression-options">
+            <h3>Compression Level</h3>
+            <div class="options-container">
+                <label class="option">
+                    <input type="radio" name="compression" value="low">
+                    <span class="option-text">Low</span>
+                    <span class="option-desc">Best quality, larger file size</span>
+                </label>
+                <label class="option">
+                    <input type="radio" name="compression" value="medium" checked>
+                    <span class="option-text">Medium</span>
+                    <span class="option-desc">Balanced quality and size</span>
+                </label>
+                <label class="option">
+                    <input type="radio" name="compression" value="high">
+                    <span class="option-text">High</span>
+                    <span class="option-desc">Smallest file size</span>
+                </label>
+            </div>
+        </div>
+
+        <!-- 压缩按钮 -->
+        <button id="compressBtn" class="compress-btn" disabled>Start Compression</button>
+
+        <!-- 压缩结果 -->
+        <div class="compression-result">
+            <div class="compression-status"></div>
+            <p id="compressionStats" class="compression-stats"></p>
+            <a href="#" class="download-button">Download Compressed File</a>
+        </div>
+    </div>
+
+    <script src="js/main.js"></script>
+</body>
+</html> 

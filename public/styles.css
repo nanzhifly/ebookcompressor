@@ -1,0 +1,49 @@
+/* 压缩状态显示 */
+.compression-status {
+    margin: 20px 0;
+    padding: 15px;
+    text-align: center;
+    color: #666;
+    font-size: 16px;
+    border-radius: 8px;
+    background-color: #f8f9fa;
+}
+
+/* 下载按钮样式 */
+.download-button {
+    display: none;
+    margin: 20px auto;
+    padding: 12px 24px;
+    background-color: #007bff;
+    color: white;
+    text-decoration: none;
+    border-radius: 8px;
+    text-align: center;
+    font-size: 16px;
+    transition: background-color 0.3s ease;
+    max-width: 300px;
+}
+
+.download-button:hover {
+    background-color: #0056b3;
+    text-decoration: none;
+    color: white;
+}
+
+/* 压缩统计信息 */
+#compressionStats {
+    margin: 15px 0;
+    text-align: center;
+    font-size: 14px;
+    color: #666;
+}
+
+/* 成功状态 */
+.success {
+    color: #28a745 !important;
+}
+
+/* 错误状态 */
+.error {
+    color: #dc3545 !important;
+} 
