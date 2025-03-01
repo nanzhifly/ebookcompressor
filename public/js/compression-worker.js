@@ -1,6 +1,7 @@
 // 导入必要的库
 importScripts('/js/lib/pdf-lib.min.js');
 importScripts('/js/lib/comlink.min.js');
+importScripts('/js/lib/browser-image-compression.min.js');
 
 // 压缩设置
 const compressionSettings = {
@@ -10,7 +11,9 @@ const compressionSettings = {
         removeMetadata: false,     // 是否移除元数据
         imageResolution: 150,      // 图像分辨率 DPI
         compressStreams: true,     // 压缩对象流
-        preserveFormatting: true   // 保留格式
+        preserveFormatting: true,  // 保留格式
+        maxImageSize: 2048,        // 最大图像尺寸
+        convertToJPG: false        // 是否转换为 JPG
     },
     'medium': {
         imageQuality: 0.6,
@@ -18,7 +21,9 @@ const compressionSettings = {
         removeMetadata: true,
         imageResolution: 120,
         compressStreams: true,
-        preserveFormatting: false
+        preserveFormatting: false,
+        maxImageSize: 1600,
+        convertToJPG: true
     },
     'high': {
         imageQuality: 0.4,
@@ -26,7 +31,9 @@ const compressionSettings = {
         removeMetadata: true,
         imageResolution: 96,
         compressStreams: true,
-        preserveFormatting: false
+        preserveFormatting: false,
+        maxImageSize: 1200,
+        convertToJPG: true
     }
 };
 
@@ -56,14 +63,25 @@ async function compressPDF(arrayBuffer, compressionLevel = 'medium') {
                 message: `正在处理第 ${i + 1} 页，共 ${pageCount} 页...`
             });
             
+            // 复制页面
             const [copiedPage] = await newPdfDoc.copyPages(pdfDoc, [i]);
             
             // 处理页面中的图像
             if (settings.compressImages) {
-                const images = await extractImagesFromPage(copiedPage);
-                for (const image of images) {
-                    const compressedImage = await compressImage(image, settings);
-                    // TODO: 替换原图像
+                try {
+                    // 提取页面中的图像
+                    const images = await extractImagesFromPage(pdfDoc, i);
+                    
+                    // 压缩每个图像
+                    for (const image of images) {
+                        const compressedImage = await compressImage(image, settings);
+                        if (compressedImage) {
+                            // 替换原图像
+                            await replacePageImage(copiedPage, image.index, compressedImage);
+                        }
+                    }
+                } catch (error) {
+                    console.error('图像处理错误:', error);
                 }
             }
             
@@ -94,16 +112,88 @@ async function compressPDF(arrayBuffer, compressionLevel = 'medium') {
     }
 }
 
-// 从页面提取图像（TODO: 实现此功能）
-async function extractImagesFromPage(page) {
-    // TODO: 实现图像提取
-    return [];
+// 从页面提取图像
+async function extractImagesFromPage(pdfDoc, pageIndex) {
+    const page = pdfDoc.getPages()[pageIndex];
+    const images = [];
+    
+    try {
+        // 获取页面的操作对象
+        const ops = await page.getOperatorList();
+        let imageIndex = 0;
+        
+        // 遍历操作找到图像
+        for (let i = 0; i < ops.fnArray.length; i++) {
+            if (ops.fnArray[i] === PDFLib.OPS.paintImageXObject) {
+                const imageRef = ops.argsArray[i][0];
+                if (imageRef) {
+                    const image = page.getImage(imageRef);
+                    if (image) {
+                        images.push({
+                            index: imageIndex++,
+                            data: image.data,
+                            width: image.width,
+                            height: image.height
+                        });
+                    }
+                }
+            }
+        }
+    } catch (error) {
+        console.error('提取图像错误:', error);
+    }
+    
+    return images;
 }
 
-// 压缩图像（TODO: 实现此功能）
+// 压缩图像
 async function compressImage(image, settings) {
-    // TODO: 实现图像压缩
-    return image;
+    try {
+        // 创建 canvas 来处理图像
+        const canvas = new OffscreenCanvas(image.width, image.height);
+        const ctx = canvas.getContext('2d');
+        
+        // 将图像数据绘制到 canvas
+        const imageData = new ImageData(
+            new Uint8ClampedArray(image.data),
+            image.width,
+            image.height
+        );
+        ctx.putImageData(imageData, 0, 0);
+        
+        // 获取 blob
+        const blob = await canvas.convertToBlob({
+            type: settings.convertToJPG ? 'image/jpeg' : 'image/png',
+            quality: settings.imageQuality
+        });
+        
+        // 使用 browser-image-compression 压缩
+        const compressedBlob = await imageCompression(blob, {
+            maxSizeMB: 1,
+            maxWidthOrHeight: settings.maxImageSize,
+            useWebWorker: true,
+            fileType: settings.convertToJPG ? 'image/jpeg' : 'image/png'
+        });
+        
+        // 转换回 ArrayBuffer
+        return await compressedBlob.arrayBuffer();
+    } catch (error) {
+        console.error('图像压缩错误:', error);
+        return null;
+    }
+}
+
+// 替换页面中的图像
+async function replacePageImage(page, imageIndex, compressedImageData) {
+    try {
+        // 创建新的 PDFImage
+        const image = await PDFLib.PDFImage.create(page.doc, compressedImageData);
+        
+        // 替换原图像
+        page.node.setImage(imageIndex, image);
+    } catch (error) {
+        console.error('替换图像错误:', error);
+    }
 }
 
 // EPUB 压缩函数
