@@ -6,80 +6,316 @@ importScripts('/js/lib/comlink.min.js');
 const SERVER_URL = 'http://localhost:3000';
 
 // PDF 内容分析器
-class PDFAnalyzer {
+class PDFContentAnalyzer {
+    constructor() {
+        this.contentTypes = {
+            TEXT: 'text',
+            IMAGE: 'image',
+            VECTOR: 'vector',
+            FONT: 'font'
+        };
+    }
+
     async analyzePDF(pdfDoc) {
         const analysis = {
             pageCount: pdfDoc.getPageCount(),
-            images: [],
-            fonts: new Set(),
-            metadata: {},
-            totalSize: 0
+            contentMap: new Map(),
+            metadata: await pdfDoc.getMetadata(),
+            totalSize: 0,
+            stats: {
+                imageCount: 0,
+                totalImageSize: 0,
+                textStreamCount: 0,
+                totalTextSize: 0,
+                vectorCount: 0,
+                fontCount: 0
+            }
         };
 
         // 分析每一页
         for (let i = 0; i < analysis.pageCount; i++) {
             const page = pdfDoc.getPage(i);
-            const pageDict = page.node;
-            await this.analyzePage(pageDict, analysis);
+            await this.analyzePage(page, analysis);
+            
+            // 发送进度信息
+            postMessage({
+                type: 'progress',
+                progress: (i / analysis.pageCount) * 30,
+                message: `分析第 ${i + 1}/${analysis.pageCount} 页...`
+            });
         }
 
         return analysis;
     }
 
-    async analyzePage(pageDict, analysis) {
-        if (pageDict.Resources) {
-            // 分析图像
-            if (pageDict.Resources.XObject) {
-                const xObjects = pageDict.Resources.XObject.dict;
-                for (const [name, xObject] of Object.entries(xObjects)) {
-                    if (xObject instanceof PDFLib.PDFImage) {
-                        analysis.images.push({
-                            name,
-                            width: xObject.width || xObject.Size[0],
-                            height: xObject.height || xObject.Size[1],
-                            object: xObject
-                        });
-                    }
-                }
-            }
+    async analyzePage(page, analysis) {
+        const pageDict = page.node;
+        const resources = pageDict.Resources;
+        
+        if (!resources) return;
 
-            // 分析字体
-            if (pageDict.Resources.Font) {
-                const fonts = pageDict.Resources.Font.dict;
-                for (const font of Object.values(fonts)) {
-                    analysis.fonts.add(font);
+        // 分析图像对象
+        if (resources.XObject) {
+            const xObjects = resources.XObject.dict;
+            for (const [name, xObject] of Object.entries(xObjects)) {
+                if (xObject instanceof PDFLib.PDFImage) {
+                    const imageInfo = await this.analyzeImage(xObject);
+                    analysis.stats.imageCount++;
+                    analysis.stats.totalImageSize += imageInfo.size;
+                    analysis.contentMap.set(name, {
+                        type: this.contentTypes.IMAGE,
+                        ...imageInfo
+                    });
                 }
             }
         }
+
+        // 分析文本和字体
+        if (resources.Font) {
+            const fonts = resources.Font.dict;
+            for (const [name, font] of Object.entries(fonts)) {
+                const fontInfo = await this.analyzeFont(font);
+                analysis.stats.fontCount++;
+                analysis.contentMap.set(name, {
+                    type: this.contentTypes.FONT,
+                    ...fontInfo
+                });
+            }
+        }
+
+        // 分析内容流
+        if (pageDict.Contents) {
+            const streamInfo = await this.analyzeContentStream(pageDict.Contents);
+            analysis.stats.textStreamCount++;
+            analysis.stats.totalTextSize += streamInfo.size;
+        }
+    }
+
+    async analyzeImage(image) {
+        return {
+            width: image.width || image.Size[0],
+            height: image.height || image.Size[1],
+            bitsPerComponent: image.BitsPerComponent,
+            colorSpace: image.ColorSpace,
+            size: (await image.getRawData()).length,
+            filter: image.Filter,
+            compressionPotential: this.estimateCompressionPotential(image)
+        };
+    }
+
+    async analyzeFont(font) {
+        return {
+            subtype: font.Subtype,
+            baseFont: font.BaseFont,
+            isEmbedded: !!font.FontDescriptor,
+            isSubset: font.BaseFont?.toString().startsWith('/'),
+            size: font.FontDescriptor ? 
+                  (await font.FontDescriptor.FontFile?.getRawData())?.length || 0 : 0
+        };
+    }
+
+    async analyzeContentStream(contents) {
+        let totalSize = 0;
+        if (Array.isArray(contents)) {
+            for (const content of contents) {
+                totalSize += (await content.getContents())?.length || 0;
+            }
+        } else {
+            totalSize = (await contents?.getContents())?.length || 0;
+        }
+        return { size: totalSize };
+    }
+
+    estimateCompressionPotential(image) {
+        // 评估图像的压缩潜力
+        let potential = 'medium';
+        
+        // 检查是否已经压缩
+        if (image.Filter?.includes('DCTDecode')) {
+            potential = 'low'; // JPEG 已压缩
+        } else if (image.BitsPerComponent > 8 || 
+                  image.ColorSpace === 'DeviceCMYK') {
+            potential = 'high'; // 高位深或CMYK图像
+        }
+        
+        return potential;
     }
 }
 
-// 图像压缩引擎
-class ImageCompressionEngine {
+// 压缩策略管理器
+class CompressionStrategyManager {
     constructor(level) {
-        this.params = {
+        this.level = level;
+        this.analyzer = new PDFContentAnalyzer();
+    }
+
+    getImageStrategy(imageInfo) {
+        const strategies = {
             low: {
-                quality: 0.9,
+                quality: 0.92,
                 maxSize: 2048,
                 colorSpace: 'rgb',
                 method: 'jpeg'
             },
             medium: {
-                quality: 0.6,
+                quality: 0.85,
                 maxSize: 1600,
                 colorSpace: 'rgb',
                 method: 'jpeg+flate'
             },
             high: {
-                quality: 0.4,
+                quality: 0.6,
                 maxSize: 1200,
                 colorSpace: 'grayscale',
                 method: 'jpeg+flate'
             }
-        }[level] || this.params.medium;
+        };
+
+        // 根据压缩级别和图像分析结果调整策略
+        const baseStrategy = strategies[this.level];
+        if (imageInfo.compressionPotential === 'low') {
+            baseStrategy.quality = Math.min(baseStrategy.quality + 0.1, 0.95);
+        } else if (imageInfo.compressionPotential === 'high') {
+            baseStrategy.quality = Math.max(baseStrategy.quality - 0.1, 0.3);
+        }
+
+        return baseStrategy;
     }
 
-    async processImage(imageData, width, height) {
+    getTextStrategy() {
+        return {
+            low: { compress: true, level: 3 },
+            medium: { compress: true, level: 6 },
+            high: { compress: true, level: 9 }
+        }[this.level];
+    }
+
+    getFontStrategy() {
+        return {
+            low: { subset: true, compress: true },
+            medium: { subset: true, compress: true },
+            high: { subset: true, compress: true }
+        }[this.level];
+    }
+
+    getVectorStrategy() {
+        return {
+            low: { optimize: false },
+            medium: { optimize: true },
+            high: { optimize: true, simplify: true }
+        }[this.level];
+    }
+}
+
+// 分层压缩引擎
+class LayeredCompressionEngine {
+    constructor(level) {
+        this.level = level;
+        this.strategyManager = new CompressionStrategyManager(level);
+        this.analyzer = new PDFContentAnalyzer();
+    }
+
+    async compressPDF(arrayBuffer) {
+        try {
+            // 加载文档
+            const pdfDoc = await PDFLib.PDFDocument.load(arrayBuffer);
+            
+            // 分析内容
+            const analysis = await this.analyzer.analyzePDF(pdfDoc);
+            
+            // 创建新文档
+            const newPdfDoc = await PDFLib.PDFDocument.create();
+            
+            // 处理每一页
+            for (let i = 0; i < analysis.pageCount; i++) {
+                postMessage({
+                    type: 'progress',
+                    progress: 30 + (i / analysis.pageCount) * 70,
+                    message: `压缩第 ${i + 1}/${analysis.pageCount} 页...`
+                });
+
+                const [page] = await newPdfDoc.copyPages(pdfDoc, [i]);
+                await this.processPage(page, analysis.contentMap);
+                newPdfDoc.addPage(page);
+            }
+
+            // 应用文档级压缩
+            return await newPdfDoc.save({
+                useObjectStreams: true,
+                addDefaultPage: false,
+                useCompression: true,
+                objectsPerTick: Math.max(20, Math.min(50, analysis.pageCount * 2)),
+                compress: true,
+                deflateLevel: this.getDeflateLevel(),
+                preserveObjectIds: false
+            });
+
+        } catch (error) {
+            console.error('PDF压缩失败:', error);
+            throw error;
+        }
+    }
+
+    async processPage(page, contentMap) {
+        try {
+            const pageDict = page.node;
+            const resources = pageDict.Resources;
+
+            if (!resources) return;
+
+            // 处理图像
+            if (resources.XObject) {
+                const xObjects = resources.XObject.dict;
+                for (const [name, xObject] of Object.entries(xObjects)) {
+                    if (xObject instanceof PDFLib.PDFImage) {
+                        const contentInfo = contentMap.get(name);
+                        if (contentInfo) {
+                            await this.processImage(xObject, page, contentInfo);
+                        }
+                    }
+                }
+            }
+
+            // 处理内容流
+            if (pageDict.Contents) {
+                await this.processContents(pageDict.Contents);
+            }
+
+        } catch (error) {
+            console.error('页面处理失败:', error);
+        }
+    }
+
+    async processImage(image, page, contentInfo) {
+        try {
+            const strategy = this.strategyManager.getImageStrategy(contentInfo);
+            const rawData = await image.getRawData();
+            
+            // 创建图像数据
+            const imageData = new ImageData(
+                new Uint8ClampedArray(rawData),
+                contentInfo.width,
+                contentInfo.height
+            );
+
+            // 处理图像
+            const processedData = await this.compressImage(
+                imageData,
+                contentInfo.width,
+                contentInfo.height,
+                strategy
+            );
+
+            if (processedData) {
+                const newImage = await page.doc.embedJpg(processedData);
+                Object.assign(image, newImage);
+            }
+        } catch (error) {
+            console.error('图像处理失败:', error);
+        }
+    }
+
+    async compressImage(imageData, width, height, strategy) {
         try {
             // 创建离屏画布
             const canvas = new OffscreenCanvas(width, height);
@@ -94,8 +330,8 @@ class ImageCompressionEngine {
             // 计算新尺寸
             let newWidth = width;
             let newHeight = height;
-            if (Math.max(width, height) > this.params.maxSize) {
-                const ratio = this.params.maxSize / Math.max(width, height);
+            if (Math.max(width, height) > strategy.maxSize) {
+                const ratio = strategy.maxSize / Math.max(width, height);
                 newWidth = Math.floor(width * ratio);
                 newHeight = Math.floor(height * ratio);
             }
@@ -113,7 +349,7 @@ class ImageCompressionEngine {
             scaleCtx.drawImage(canvas, 0, 0, newWidth, newHeight);
 
             // 应用颜色空间转换
-            if (this.params.colorSpace === 'grayscale') {
+            if (strategy.colorSpace === 'grayscale') {
                 const imgData = scaleCtx.getImageData(0, 0, newWidth, newHeight);
                 const data = imgData.data;
                 for (let i = 0; i < data.length; i += 4) {
@@ -130,219 +366,56 @@ class ImageCompressionEngine {
             // 压缩图像
             const blob = await scaleCanvas.convertToBlob({
                 type: 'image/jpeg',
-                quality: this.params.quality
+                quality: strategy.quality
             });
 
             // 如果使用额外的压缩
-            if (this.params.method.includes('flate')) {
+            if (strategy.method.includes('flate')) {
                 const compressedData = new Uint8Array(await blob.arrayBuffer());
-                return this.applyFlateCompression(compressedData);
+                return PDFLib.deflate(compressedData);
             }
 
             return new Uint8Array(await blob.arrayBuffer());
         } catch (error) {
-            console.error('图像处理失败:', error);
+            console.error('图像压缩失败:', error);
             return null;
         }
     }
 
-    applyFlateCompression(data) {
-        // 使用 PDF-lib 的 Flate 压缩
-        return PDFLib.deflate(data);
-    }
-}
-
-// 内容压缩引擎
-class ContentCompressionEngine {
-    constructor(level) {
-        this.params = {
-            low: {
-                compress: true,
-                level: 1
-            },
-            medium: {
-                compress: true,
-                level: 6
-            },
-            high: {
-                compress: true,
-                level: 9
-            }
-        }[level] || this.params.medium;
-    }
-
-    async processContent(content) {
-        if (!content) return null;
-        try {
-            return PDFLib.deflate(content, this.params.level);
-        } catch (error) {
-            console.error('内容压缩失败:', error);
-            return content;
-        }
-    }
-}
-
-// 混合压缩引擎
-class HybridCompressionEngine {
-    constructor(level) {
-        this.level = level;
-        this.imageEngine = new ImageCompressionEngine(level);
-        this.contentEngine = new ContentCompressionEngine(level);
-    }
-
-    async compressPDF(arrayBuffer) {
-        try {
-            // 加载原始文档
-            const pdfDoc = await PDFLib.PDFDocument.load(arrayBuffer);
-            const newPdfDoc = await PDFLib.PDFDocument.create();
-
-            // 获取页面数量
-            const pageCount = pdfDoc.getPageCount();
-
-            // 处理每一页
-            for (let i = 0; i < pageCount; i++) {
-                // 发送进度信息
-                postMessage({
-                    type: 'progress',
-                    progress: (i / pageCount) * 100,
-                    message: `正在处理第 ${i + 1} 页，共 ${pageCount} 页...`
-                });
-
-                // 复制页面
-                const [page] = await newPdfDoc.copyPages(pdfDoc, [i]);
-                
-                // 处理页面内容
-                await this.processPage(page);
-                
-                newPdfDoc.addPage(page);
-            }
-
-            // 根据压缩级别设置保存选项
-            const saveOptions = this.getSaveOptions();
-            
-            // 保存文档
-            return await newPdfDoc.save(saveOptions);
-
-        } catch (error) {
-            throw new Error(`PDF 压缩失败: ${error.message}`);
-        }
-    }
-
-    async processPage(page) {
-        try {
-            const pageDict = page.node;
-            const resources = pageDict.Resources;
-
-            if (resources) {
-                // 处理图像
-                if (resources.XObject) {
-                    const xObjects = resources.XObject.dict;
-                    for (const [name, xObject] of Object.entries(xObjects)) {
-                        if (xObject instanceof PDFLib.PDFImage) {
-                            await this.processImage(xObject, page);
-                        }
-                    }
-                }
-
-                // 处理内容流
-                if (pageDict.Contents) {
-                    await this.processContents(pageDict.Contents);
-                }
-            }
-        } catch (error) {
-            console.error('页面处理失败:', error);
-        }
-    }
-
-    async processImage(image, page) {
-        try {
-            const width = image.width || image.Size[0];
-            const height = image.height || image.Size[1];
-            const rawData = await image.getRawData();
-
-            // 创建图像数据
-            const imageData = new ImageData(
-                new Uint8ClampedArray(rawData),
-                width,
-                height
-            );
-
-            // 使用图像引擎处理
-            const processedData = await this.imageEngine.processImage(
-                imageData,
-                width,
-                height
-            );
-
-            if (processedData) {
-                // 嵌入处理后的图像
-                const newImage = await page.doc.embedJpg(processedData);
-                Object.assign(image, newImage);
-            }
-        } catch (error) {
-            console.error('图像处理失败:', error);
-        }
-    }
-
     async processContents(contents) {
+        const strategy = this.strategyManager.getTextStrategy();
         try {
             if (Array.isArray(contents)) {
                 for (const content of contents) {
-                    await this.processSingleContent(content);
+                    await this.processContentStream(content, strategy);
                 }
             } else {
-                await this.processSingleContent(contents);
+                await this.processContentStream(contents, strategy);
             }
         } catch (error) {
-            console.error('内容处理失败:', error);
+            console.error('内容流处理失败:', error);
         }
     }
 
-    async processSingleContent(content) {
+    async processContentStream(content, strategy) {
         try {
             if (!content) return;
             const data = await content.getContents();
             if (data) {
-                const processed = await this.contentEngine.processContent(data);
-                if (processed) {
-                    content.setContent(processed);
-                }
+                const processed = PDFLib.deflate(data, strategy.level);
+                content.setContent(processed);
             }
         } catch (error) {
-            console.error('单个内容处理失败:', error);
+            console.error('内容流压缩失败:', error);
         }
     }
 
-    getSaveOptions() {
-        const options = {
-            low: {
-                useObjectStreams: true,
-                addDefaultPage: false,
-                useCompression: true,
-                objectsPerTick: 50,
-                compress: true,
-                deflateLevel: 1
-            },
-            medium: {
-                useObjectStreams: true,
-                addDefaultPage: false,
-                useCompression: true,
-                objectsPerTick: 40,
-                compress: true,
-                deflateLevel: 6
-            },
-            high: {
-                useObjectStreams: true,
-                addDefaultPage: false,
-                useCompression: true,
-                objectsPerTick: 30,
-                compress: true,
-                deflateLevel: 9,
-                preserveObjectIds: false
-            }
-        };
-
-        return options[this.level] || options.medium;
+    getDeflateLevel() {
+        return {
+            low: 3,
+            medium: 6,
+            high: 9
+        }[this.level] || 6;
     }
 }
 
@@ -361,45 +434,16 @@ class EPUBCompressor {
 const compression = {
     async compressFile(file, compressionLevel) {
         try {
-            // 创建 FormData
-            const formData = new FormData();
-            formData.append('file', file);
-            formData.append('compressionLevel', compressionLevel);
+            const arrayBuffer = await file.arrayBuffer();
 
-            // 发送压缩请求到服务器
-            const response = await fetch(`${SERVER_URL}/compress`, {
-                method: 'POST',
-                body: formData
-            });
-
-            if (!response.ok) {
-                throw new Error('服务器压缩失败');
+            if (file.name.toLowerCase().endsWith('.pdf')) {
+                const compressor = new LayeredCompressionEngine(compressionLevel);
+                return await compressor.compressPDF(arrayBuffer);
+            } else if (file.name.toLowerCase().endsWith('.epub')) {
+                throw new Error('EPUB 压缩功能尚未实现');
+            } else {
+                throw new Error('不支持的文件类型');
             }
-
-            const result = await response.json();
-
-            if (!result.success) {
-                throw new Error(result.error || '压缩过程出错');
-            }
-
-            // 发送压缩统计信息
-            postMessage({
-                type: 'progress',
-                progress: 100,
-                message: `压缩完成！
-                原始大小: ${(result.stats.originalSize / 1024 / 1024).toFixed(2)} MB
-                压缩后大小: ${(result.stats.compressedSize / 1024 / 1024).toFixed(2)} MB
-                压缩率: ${result.stats.compressionRatio}%`
-            });
-
-            // 将Base64数据转换回Uint8Array
-            const binaryString = atob(result.data);
-            const bytes = new Uint8Array(binaryString.length);
-            for (let i = 0; i < binaryString.length; i++) {
-                bytes[i] = binaryString.charCodeAt(i);
-            }
-            return bytes;
-
         } catch (error) {
             console.error('压缩失败:', error);
             throw error;
