@@ -3,6 +3,64 @@ importScripts('/js/lib/pdf-lib.min.js');
 importScripts('/js/lib/comlink.min.js');
 importScripts('/js/lib/browser-image-compression.min.js');
 
+// 图像处理器
+const ImageProcessor = {
+    // 创建 Canvas
+    async createCanvas(width, height) {
+        const canvas = new OffscreenCanvas(width, height);
+        const ctx = canvas.getContext('2d');
+        return { canvas, ctx };
+    },
+    
+    // 加载图像
+    async loadImage(data) {
+        return await createImageBitmap(new Blob([data]));
+    },
+    
+    // 应用压缩设置
+    async compress(imageData, settings) {
+        try {
+            // 创建图像
+            const img = await this.loadImage(imageData);
+            
+            // 计算新尺寸
+            let width = img.width;
+            let height = img.height;
+            
+            if (width > settings.maxImageSize || height > settings.maxImageSize) {
+                const ratio = Math.min(settings.maxImageSize / width, settings.maxImageSize / height);
+                width = Math.floor(width * ratio);
+                height = Math.floor(height * ratio);
+            }
+            
+            // 创建 Canvas
+            const { canvas, ctx } = await this.createCanvas(width, height);
+            
+            // 应用颜色空间转换
+            if (settings.colorSpace === 'DeviceGray') {
+                ctx.filter = 'grayscale(100%)';
+            }
+            
+            // 绘制图像
+            ctx.drawImage(img, 0, 0, width, height);
+            
+            // 获取压缩后的数据
+            const blob = await canvas.convertToBlob({
+                type: 'image/jpeg',
+                quality: settings.imageQuality
+            });
+            
+            // 清理资源
+            img.close();
+            
+            return new Uint8Array(await blob.arrayBuffer());
+        } catch (error) {
+            console.error('图像压缩失败:', error);
+            return null;
+        }
+    }
+};
+
 // 压缩设置
 const compressionSettings = {
     'low': {
@@ -57,67 +115,50 @@ async function compressPDF(arrayBuffer, compressionLevel = 'medium') {
                 message: `正在处理第 ${i + 1} 页，共 ${pageCount} 页...`
             });
             
-            // 获取原始页面
-            const page = pdfDoc.getPage(i);
-            
-            // 获取页面上的所有图像
-            const imageObjects = await page.getImages();
-            
-            // 创建压缩后的图像映射
-            const compressedImages = new Map();
-            
-            // 压缩所有图像
-            if (settings.compressImages && imageObjects.length > 0) {
-                for (const img of imageObjects) {
-                    try {
-                        // 获取图像引用
-                        const ref = img.ref;
-                        
-                        // 获取图像数据
-                        const image = await pdfDoc.embedJpg(await img.getData());
-                        
-                        // 获取图像尺寸
-                        const width = image.width;
-                        const height = image.height;
-                        
-                        // 计算新的尺寸
-                        let newWidth = width;
-                        let newHeight = height;
-                        
-                        if (width > settings.maxImageSize || height > settings.maxImageSize) {
-                            const ratio = Math.min(settings.maxImageSize / width, settings.maxImageSize / height);
-                            newWidth = Math.floor(width * ratio);
-                            newHeight = Math.floor(height * ratio);
-                        }
-                        
-                        // 创建压缩后的图像
-                        const compressedImage = await PDFLib.PDFDocument.embedJpg(
-                            await image.scaleToFit(newWidth, newHeight).getData()
-                        );
-                        
-                        // 存储压缩后的图像
-                        compressedImages.set(ref, compressedImage);
-                    } catch (error) {
-                        console.error('处理图像时出错:', error);
-                    }
-                }
-            }
-            
-            // 复制页面到新文档，同时替换图像
+            // 复制页面到新文档
             const [copiedPage] = await newPdfDoc.copyPages(pdfDoc, [i]);
             
-            // 替换页面中的图像
-            if (compressedImages.size > 0) {
-                const pageDict = copiedPage.node;
-                const resources = pageDict.Resources;
-                
-                if (resources && resources.XObject) {
-                    Object.entries(resources.XObject.dict).forEach(([name, xObject]) => {
-                        const compressed = compressedImages.get(xObject);
-                        if (compressed) {
-                            resources.XObject.dict[name] = compressed;
+            // 处理页面中的图像
+            if (settings.compressImages) {
+                try {
+                    // 获取页面对象
+                    const pageObj = copiedPage.node;
+                    const resources = pageObj.Resources;
+                    
+                    // 处理图像对象
+                    if (resources && resources.XObject) {
+                        const xObjects = resources.XObject.dict;
+                        
+                        for (const [name, xObject] of Object.entries(xObjects)) {
+                            try {
+                                // 检查是否为图像
+                                if (xObject.Subtype === 'Image') {
+                                    // 获取图像数据
+                                    const imageData = await xObject.getImageData();
+                                    
+                                    if (imageData) {
+                                        // 压缩图像
+                                        const compressedData = await ImageProcessor.compress(
+                                            imageData,
+                                            settings
+                                        );
+                                        
+                                        if (compressedData) {
+                                            // 创建新的图像对象
+                                            const compressedImage = await newPdfDoc.embedJpg(compressedData);
+                                            
+                                            // 替换原始图像
+                                            xObjects[name] = compressedImage.ref;
+                                        }
+                                    }
+                                }
+                            } catch (error) {
+                                console.error('处理单个图像时出错:', error);
+                            }
                         }
-                    });
+                    }
+                } catch (error) {
+                    console.error('处理页面图像时出错:', error);
                 }
             }
             
