@@ -14,16 +14,8 @@ const port = process.env.PORT || 3000;
 // 设置静态文件目录
 app.use(express.static('public'));
 
-// 配置文件上传
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, '/tmp/');  // Vercel 只允许写入 /tmp 目录
-    },
-    filename: (req, file, cb) => {
-        cb(null, Date.now() + path.extname(file.originalname));
-    }
-});
-
+// 配置文件上传到内存
+const storage = multer.memoryStorage();
 const upload = multer({
     storage: storage,
     limits: {
@@ -40,14 +32,13 @@ const upload = multer({
 });
 
 // 使用 pdf-lib 压缩 PDF
-async function compressPDF(inputPath, outputPath, compressionLevel) {
+async function compressPDF(fileBuffer, compressionLevel) {
     try {
         console.log('=== Starting PDF-Lib PDF compression ===');
         console.log('Compression level:', compressionLevel);
         
-        // 读取原始 PDF 文件
-        const pdfBytes = fs.readFileSync(inputPath);
-        const pdfDoc = await PDFDocument.load(pdfBytes);
+        // 从 Buffer 加载 PDF
+        const pdfDoc = await PDFDocument.load(fileBuffer);
         
         // 获取页面数量
         const pageCount = pdfDoc.getPageCount();
@@ -104,24 +95,7 @@ async function compressPDF(inputPath, outputPath, compressionLevel) {
             useCompression: true
         });
         
-        // 写入文件
-        fs.writeFileSync(outputPath, compressedPdfBytes);
-        
-        // 验证输出文件
-        if (!fs.existsSync(outputPath)) {
-            throw new Error(`Output file was not created: ${outputPath}`);
-        }
-        
-        const originalSize = fs.statSync(inputPath).size;
-        const compressedSize = fs.statSync(outputPath).size;
-        const compressionRatio = ((1 - compressedSize / originalSize) * 100).toFixed(2);
-        
-        console.log('=== Compression Results ===');
-        console.log('Original size:', originalSize, 'bytes');
-        console.log('Compressed size:', compressedSize, 'bytes');
-        console.log('Compression ratio:', compressionRatio + '%');
-        
-        return true;
+        return compressedPdfBytes;
     } catch (error) {
         console.error('PDF compression error:', error);
         throw error;
@@ -129,12 +103,12 @@ async function compressPDF(inputPath, outputPath, compressionLevel) {
 }
 
 // EPUB 压缩函数
-async function compressEPUB(inputPath, outputPath, compressionLevel) {
+async function compressEPUB(fileBuffer, compressionLevel) {
     try {
         console.log('=== Starting EPUB compression ===');
         
-        // 读取 EPUB 文件
-        const zip = new AdmZip(inputPath);
+        // 从 Buffer 创建 AdmZip 实例
+        const zip = new AdmZip(fileBuffer);
         const entries = zip.getEntries();
 
         // 根据压缩级别设置图片质量和其他参数
@@ -159,9 +133,6 @@ async function compressEPUB(inputPath, outputPath, compressionLevel) {
             optimizeImages: true,
             compressText: true
         };
-
-        // 记录原始大小
-        const originalSize = fs.statSync(inputPath).size;
 
         // 处理所有文件
         for (const entry of entries) {
@@ -216,19 +187,8 @@ async function compressEPUB(inputPath, outputPath, compressionLevel) {
             }
         }
 
-        // 写入压缩后的 EPUB 文件
-        zip.writeZip(outputPath);
-
-        // 计算压缩结果
-        const compressedSize = fs.statSync(outputPath).size;
-        const compressionRatio = ((1 - compressedSize / originalSize) * 100).toFixed(2);
-
-        console.log('=== Compression Results ===');
-        console.log('Original size:', originalSize, 'bytes');
-        console.log('Compressed size:', compressedSize, 'bytes');
-        console.log('Compression ratio:', compressionRatio + '%');
-
-        return true;
+        // 获取压缩后的 EPUB 数据
+        return zip.toBuffer();
     } catch (error) {
         console.error('EPUB compression error:', error);
         throw error;
@@ -244,43 +204,35 @@ app.post('/compress', upload.single('file'), async (req, res) => {
 
         const file = req.file;
         const compressionLevel = req.body.compressionLevel || 'medium';
-        const outputPath = path.join('/tmp', `compressed_${file.filename}`);
 
         console.log('File received:', {
             originalname: file.originalname,
             mimetype: file.mimetype,
-            size: file.size,
-            path: file.path
+            size: file.size
         });
         console.log('Compression level:', compressionLevel);
 
-        let success = false;
+        // 选择压缩函数
         const isEPUB = file.originalname.toLowerCase().endsWith('.epub');
         const compressFunction = isEPUB ? compressEPUB : compressPDF;
-        success = await compressFunction(file.path, outputPath, compressionLevel);
-
-        if (!success) {
-            throw new Error('Compression failed');
-        }
-
-        // 确保输出文件存在
-        if (!fs.existsSync(outputPath)) {
-            throw new Error('Compressed file was not created');
-        }
-
-        const inputStats = fs.statSync(file.path);
-        const outputStats = fs.statSync(outputPath);
         
-        console.log('Original size:', inputStats.size);
-        console.log('Compressed size:', outputStats.size);
+        // 压缩文件
+        const compressedBuffer = await compressFunction(file.buffer, compressionLevel);
+        
+        // 计算压缩比例
+        const originalSize = file.size;
+        const compressedSize = compressedBuffer.length;
+        
+        console.log('Original size:', originalSize);
+        console.log('Compressed size:', compressedSize);
         console.log('Compression completed successfully');
 
-        res.json({
-            success: true,
-            downloadUrl: `/download/${path.basename(outputPath)}`,
-            compressedSize: outputStats.size,
-            originalSize: inputStats.size
-        });
+        // 设置响应头
+        res.setHeader('Content-Type', file.mimetype);
+        res.setHeader('Content-Disposition', `attachment; filename="compressed_${file.originalname}"`);
+        
+        // 发送压缩后的文件
+        res.send(compressedBuffer);
 
     } catch (error) {
         console.error('Compression error:', error);

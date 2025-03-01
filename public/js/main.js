@@ -36,6 +36,19 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // 下载文件
+    function downloadBlob(blob, fileName) {
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+    }
+
     // 处理文件压缩
     async function handleCompression(file, compressionLevel) {
         try {
@@ -47,38 +60,38 @@ document.addEventListener('DOMContentLoaded', () => {
             formData.append('compressionLevel', compressionLevel);
 
             // 添加进度显示
-            updateCompressionStatus('Processing page 1 of 564...');
+            updateCompressionStatus('Processing file...');
             
             const response = await fetch('/compress', {
                 method: 'POST',
                 body: formData
             });
 
-            const result = await response.json();
-
-            if (result.success) {
-                const compressionRatio = ((1 - result.compressedSize / result.originalSize) * 100).toFixed(1);
-                const originalSize = formatFileSize(result.originalSize);
-                const compressedSize = formatFileSize(result.compressedSize);
-                
-                updateCompressionStatus(
-                    `Compression complete! ${originalSize} → ${compressedSize} (${compressionRatio}% reduced)`
-                );
-                
-                if (downloadButton) {
-                    downloadButton.href = result.downloadUrl;
-                    downloadButton.style.display = 'block';
-                    downloadButton.textContent = 'Download Compressed File';
-                }
-                
-                if (compressionStats) {
-                    compressionStats.textContent = 
-                        `Original: ${originalSize} → Compressed: ${compressedSize} (${compressionRatio}% reduction)`;
-                    compressionStats.style.color = '#28a745';
-                }
-            } else {
-                throw new Error(result.error || 'Compression failed');
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Compression failed');
             }
+
+            // 获取压缩后的文件
+            const blob = await response.blob();
+            const originalSize = file.size;
+            const compressedSize = blob.size;
+            const compressionRatio = ((1 - compressedSize / originalSize) * 100).toFixed(1);
+            
+            // 更新状态
+            updateCompressionStatus(
+                `Compression complete! ${formatFileSize(originalSize)} → ${formatFileSize(compressedSize)} (${compressionRatio}% reduced)`
+            );
+            
+            // 自动下载文件
+            downloadBlob(blob, `compressed_${file.name}`);
+            
+            if (compressionStats) {
+                compressionStats.textContent = 
+                    `Original: ${formatFileSize(originalSize)} → Compressed: ${formatFileSize(compressedSize)} (${compressionRatio}% reduction)`;
+                compressionStats.style.color = '#28a745';
+            }
+            
         } catch (error) {
             console.error('Compression error:', error);
             updateCompressionStatus(`Compression failed: ${error.message}`);

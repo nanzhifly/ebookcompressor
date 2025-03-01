@@ -20,10 +20,6 @@
       "dest": "server/server.js"
     },
     {
-      "src": "/download/(.*)",
-      "dest": "server/server.js"
-    },
-    {
       "handle": "filesystem"
     },
     {
