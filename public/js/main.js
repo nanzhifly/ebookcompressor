@@ -6,10 +6,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     const compressBtn = document.getElementById('compressBtn');
     const compressionStats = document.getElementById('compressionStats');
     const compressionStatus = document.querySelector('.compression-status');
+    const downloadButton = document.querySelector('.download-button');
 
     let selectedFile = null;
     let worker = null;
     let compression = null;
+    let compressedBlob = null;
 
     // 初始化 Web Worker
     async function initializeWorker() {
@@ -18,7 +20,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             compression = Comlink.wrap(worker);
         } catch (error) {
             console.error('Failed to initialize Web Worker:', error);
-            updateCompressionStatus('Error: Failed to initialize compression engine');
+            updateCompressionStatus('错误：无法初始化压缩引擎');
         }
     }
 
@@ -41,41 +43,52 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }
 
+    // 更新下载按钮状态
+    function updateDownloadButton(show, fileName = '') {
+        if (downloadButton) {
+            if (show) {
+                downloadButton.style.display = 'inline-block';
+                downloadButton.download = fileName;
+                downloadButton.classList.add('active');
+            } else {
+                downloadButton.style.display = 'none';
+                downloadButton.classList.remove('active');
+            }
+        }
+    }
+
     // 处理文件选择
     function handleFiles(files) {
         if (files.length > 0) {
             selectedFile = files[0];
             const fileType = selectedFile.name.toLowerCase().endsWith('.epub') ? 'EPUB' : 'PDF';
-            fileInfo.textContent = `Selected ${fileType}: ${selectedFile.name} (${formatFileSize(selectedFile.size)})`;
+            fileInfo.textContent = `已选择${fileType}文件：${selectedFile.name} (${formatFileSize(selectedFile.size)})`;
             compressBtn.disabled = false;
+            updateDownloadButton(false);
         }
     }
 
     // 下载文件
     function downloadBlob(arrayBuffer, fileName) {
-        const blob = new Blob([arrayBuffer], { 
+        compressedBlob = new Blob([arrayBuffer], { 
             type: fileName.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'application/epub+zip' 
         });
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = url;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
+        const url = window.URL.createObjectURL(compressedBlob);
+        downloadButton.href = url;
+        downloadButton.download = `compressed_${fileName}`;
+        updateDownloadButton(true, `compressed_${fileName}`);
     }
 
     // 处理文件压缩
     async function handleCompression(file, compressionLevel) {
         if (!compression) {
-            throw new Error('Compression engine is not initialized');
+            throw new Error('压缩引擎未初始化');
         }
 
         try {
             compressBtn.disabled = true;
-            updateCompressionStatus('Starting compression...');
+            updateCompressionStatus('开始压缩...');
+            updateDownloadButton(false);
 
             // 设置进度监听
             worker.onmessage = (e) => {
@@ -94,25 +107,29 @@ document.addEventListener('DOMContentLoaded', async () => {
             
             // 更新状态
             updateCompressionStatus(
-                `Compression complete! ${formatFileSize(originalSize)} → ${formatFileSize(compressedSize)} (${compressionRatio}% reduced)`
+                `压缩完成！${formatFileSize(originalSize)} → ${formatFileSize(compressedSize)} (减小 ${compressionRatio}%)`
             );
             
-            // 下载文件
-            downloadBlob(compressedArrayBuffer, `compressed_${file.name}`);
+            // 准备下载
+            downloadBlob(compressedArrayBuffer, file.name);
             
             if (compressionStats) {
-                compressionStats.textContent = 
-                    `Original: ${formatFileSize(originalSize)} → Compressed: ${formatFileSize(compressedSize)} (${compressionRatio}% reduction)`;
+                compressionStats.innerHTML = 
+                    `原始大小: ${formatFileSize(originalSize)}<br>` +
+                    `压缩后: ${formatFileSize(compressedSize)}<br>` +
+                    `压缩率: ${compressionRatio}%<br>` +
+                    `压缩级别: ${compressionLevel}`;
                 compressionStats.style.color = '#28a745';
             }
             
         } catch (error) {
-            console.error('Compression error:', error);
-            updateCompressionStatus(`Compression failed: ${error.message}`);
+            console.error('压缩错误:', error);
+            updateCompressionStatus(`压缩失败: ${error.message}`);
             if (compressionStats) {
-                compressionStats.textContent = `Error: ${error.message}`;
+                compressionStats.textContent = `错误: ${error.message}`;
                 compressionStats.style.color = '#dc3545';
             }
+            updateDownloadButton(false);
         } finally {
             compressBtn.disabled = false;
         }
@@ -157,4 +174,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         });
     });
+
+    // 初始化下载按钮状态
+    updateDownloadButton(false);
 });
