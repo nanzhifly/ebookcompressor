@@ -41,12 +41,7 @@ const compressionSettings = {
 async function compressPDF(arrayBuffer, compressionLevel = 'medium') {
     try {
         // 从 ArrayBuffer 加载 PDF
-        const pdfDoc = await PDFLib.PDFDocument.load(arrayBuffer, {
-            updateMetadata: false  // 防止自动更新元数据
-        });
-        
-        // 获取页面数量用于进度计算
-        const pageCount = pdfDoc.getPageCount();
+        const pdfDoc = await PDFLib.PDFDocument.load(arrayBuffer);
         
         // 创建新的 PDF 文档
         const newPdfDoc = await PDFLib.PDFDocument.create();
@@ -54,7 +49,10 @@ async function compressPDF(arrayBuffer, compressionLevel = 'medium') {
         // 获取压缩设置
         const settings = compressionSettings[compressionLevel] || compressionSettings.medium;
         
-        // 复制所有页面到新文档
+        // 获取页面数量
+        const pageCount = pdfDoc.getPageCount();
+        
+        // 处理每一页
         for (let i = 0; i < pageCount; i++) {
             // 发送进度信息
             postMessage({
@@ -63,26 +61,35 @@ async function compressPDF(arrayBuffer, compressionLevel = 'medium') {
                 message: `正在处理第 ${i + 1} 页，共 ${pageCount} 页...`
             });
             
-            // 复制页面
+            // 获取原始页面
+            const page = pdfDoc.getPage(i);
+            
+            // 提取页面上的所有图像
+            const imageIndices = await extractPageImageIndices(page);
+            
+            // 复制页面到新文档
             const [copiedPage] = await newPdfDoc.copyPages(pdfDoc, [i]);
             newPdfDoc.addPage(copiedPage);
             
-            // 处理页面中的图像
-            if (settings.compressImages) {
-                try {
-                    const images = await extractImagesFromPage(pdfDoc.getPage(i));
-                    for (const image of images) {
-                        try {
-                            const compressedImage = await compressImage(image.ref, settings);
+            // 如果需要压缩图像
+            if (settings.compressImages && imageIndices.length > 0) {
+                for (const index of imageIndices) {
+                    try {
+                        // 获取图像对象
+                        const image = await page.getImage(index);
+                        
+                        if (image) {
+                            // 压缩图像
+                            const compressedImage = await compressImage(image, settings);
+                            
                             if (compressedImage) {
-                                await embedCompressedImage(newPdfDoc, copiedPage, image.index, compressedImage);
+                                // 替换图像
+                                await replacePageImage(copiedPage, index, compressedImage);
                             }
-                        } catch (error) {
-                            console.error('图像压缩错误:', error);
                         }
+                    } catch (error) {
+                        console.error(`处理图像 ${index} 时出错:`, error);
                     }
-                } catch (error) {
-                    console.error('页面图像处理错误:', error);
                 }
             }
         }
@@ -111,82 +118,102 @@ async function compressPDF(arrayBuffer, compressionLevel = 'medium') {
     }
 }
 
-// 从页面提取图像
-async function extractImagesFromPage(page) {
-    const images = [];
+// 提取页面中的图像索引
+async function extractPageImageIndices(page) {
+    const indices = [];
     try {
-        // 获取页面上的所有图像对象
-        const imageObjects = await page.getImages();
+        // 获取页面的操作列表
+        const operatorList = await page.getOperatorList();
         
-        for (let i = 0; i < imageObjects.length; i++) {
-            const img = imageObjects[i];
-            images.push({
-                ref: img,
-                index: i
-            });
+        // 遍历操作列表查找图像
+        for (let i = 0; i < operatorList.fnArray.length; i++) {
+            if (operatorList.fnArray[i] === PDFLib.OPS.paintImageXObject) {
+                const imageIndex = operatorList.argsArray[i][0];
+                if (imageIndex && !indices.includes(imageIndex)) {
+                    indices.push(imageIndex);
+                }
+            }
         }
     } catch (error) {
-        console.error('提取图像错误:', error);
+        console.error('提取图像索引时出错:', error);
     }
-    return images;
+    return indices;
 }
 
 // 压缩图像
-async function compressImage(imageRef, settings) {
+async function compressImage(image, settings) {
     try {
         // 获取图像数据
-        const image = await imageRef.getData();
-        const width = imageRef.getWidth();
-        const height = imageRef.getHeight();
+        const imageData = await image.getData();
+        const width = image.getWidth();
+        const height = image.getHeight();
         
         // 计算新的尺寸
-        const maxSize = settings.maxImageSize;
         let newWidth = width;
         let newHeight = height;
         
-        if (width > maxSize || height > maxSize) {
-            if (width > height) {
-                newWidth = maxSize;
-                newHeight = Math.round(height * (maxSize / width));
-            } else {
-                newHeight = maxSize;
-                newWidth = Math.round(width * (maxSize / height));
-            }
+        if (width > settings.maxImageSize || height > settings.maxImageSize) {
+            const ratio = Math.min(settings.maxImageSize / width, settings.maxImageSize / height);
+            newWidth = Math.floor(width * ratio);
+            newHeight = Math.floor(height * ratio);
         }
         
-        // 创建压缩选项
-        const options = {
-            maxSizeMB: 2,
-            maxWidthOrHeight: maxSize,
-            useWebWorker: false,  // 在 Worker 中不能再使用 Worker
-            fileType: settings.convertToJPG ? 'image/jpeg' : 'image/png',
-            initialQuality: settings.imageQuality
-        };
+        // 创建缩放后的图像数据
+        const scaledData = await resizeImageData(imageData, width, height, newWidth, newHeight);
         
-        // 压缩图像
-        const compressedData = await imageCompression(
-            new Blob([image], { type: 'image/png' }),
-            options
-        );
-        
-        return new Uint8Array(await compressedData.arrayBuffer());
+        // 根据设置选择输出格式
+        if (settings.convertToJPG) {
+            return await PDFLib.PDFDocument.embedJpg(scaledData);
+        } else {
+            return await PDFLib.PDFDocument.embedPng(scaledData);
+        }
     } catch (error) {
-        console.error('图像压缩错误:', error);
+        console.error('压缩图像时出错:', error);
         return null;
     }
 }
 
-// 将压缩后的图像嵌入 PDF
-async function embedCompressedImage(pdfDoc, page, index, imageData) {
+// 调整图像大小
+async function resizeImageData(data, oldWidth, oldHeight, newWidth, newHeight) {
+    // 创建原始图像数据数组
+    const sourceData = new Uint8ClampedArray(data);
+    const targetData = new Uint8ClampedArray(newWidth * newHeight * 4);
+    
+    // 计算缩放比例
+    const xRatio = oldWidth / newWidth;
+    const yRatio = oldHeight / newHeight;
+    
+    // 双线性插值算法
+    for (let y = 0; y < newHeight; y++) {
+        for (let x = 0; x < newWidth; x++) {
+            const px = Math.floor(x * xRatio);
+            const py = Math.floor(y * yRatio);
+            
+            const targetIndex = (y * newWidth + x) * 4;
+            const sourceIndex = (py * oldWidth + px) * 4;
+            
+            targetData[targetIndex] = sourceData[sourceIndex];         // R
+            targetData[targetIndex + 1] = sourceData[sourceIndex + 1]; // G
+            targetData[targetIndex + 2] = sourceData[sourceIndex + 2]; // B
+            targetData[targetIndex + 3] = sourceData[sourceIndex + 3]; // A
+        }
+    }
+    
+    return targetData;
+}
+
+// 替换页面中的图像
+async function replacePageImage(page, imageIndex, newImage) {
     try {
-        let image;
-        if (imageData) {
-            image = await pdfDoc.embedPng(imageData);
-            // 在页面中替换图像
-            // TODO: 实现图像替换逻辑
+        if (page && newImage) {
+            // 获取页面的资源字典
+            const resources = page.getResources();
+            
+            // 更新图像资源
+            resources.updateImage(imageIndex, newImage);
         }
     } catch (error) {
-        console.error('嵌入图像错误:', error);
+        console.error('替换图像时出错:', error);
     }
 }
 
