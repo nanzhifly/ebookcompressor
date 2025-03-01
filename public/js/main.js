@@ -1,14 +1,29 @@
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     // DOM 元素
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
     const fileInfo = document.getElementById('fileInfo');
     const compressBtn = document.getElementById('compressBtn');
     const compressionStats = document.getElementById('compressionStats');
-    const downloadButton = document.querySelector('.download-button');
     const compressionStatus = document.querySelector('.compression-status');
 
     let selectedFile = null;
+    let worker = null;
+    let compression = null;
+
+    // 初始化 Web Worker
+    async function initializeWorker() {
+        try {
+            worker = new Worker('/js/compression-worker.js');
+            compression = Comlink.wrap(worker);
+        } catch (error) {
+            console.error('Failed to initialize Web Worker:', error);
+            updateCompressionStatus('Error: Failed to initialize compression engine');
+        }
+    }
+
+    // 初始化 Worker
+    await initializeWorker();
 
     // 文件大小格式化
     function formatFileSize(bytes) {
@@ -37,7 +52,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // 下载文件
-    function downloadBlob(blob, fileName) {
+    function downloadBlob(arrayBuffer, fileName) {
+        const blob = new Blob([arrayBuffer], { 
+            type: fileName.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'application/epub+zip' 
+        });
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.style.display = 'none';
@@ -51,31 +69,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 处理文件压缩
     async function handleCompression(file, compressionLevel) {
+        if (!compression) {
+            throw new Error('Compression engine is not initialized');
+        }
+
         try {
             compressBtn.disabled = true;
-            updateCompressionStatus('Compressing...');
+            updateCompressionStatus('Starting compression...');
+
+            // 设置进度监听
+            worker.onmessage = (e) => {
+                if (e.data.type === 'progress') {
+                    updateCompressionStatus(`${e.data.message} (${Math.round(e.data.progress)}%)`);
+                }
+            };
+
+            // 压缩文件
+            const compressedArrayBuffer = await compression.compressFile(file, compressionLevel);
             
-            const formData = new FormData();
-            formData.append('file', file);
-            formData.append('compressionLevel', compressionLevel);
-
-            // 添加进度显示
-            updateCompressionStatus('Processing file...');
-            
-            const response = await fetch('/compress', {
-                method: 'POST',
-                body: formData
-            });
-
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.error || 'Compression failed');
-            }
-
-            // 获取压缩后的文件
-            const blob = await response.blob();
+            // 计算压缩比例
             const originalSize = file.size;
-            const compressedSize = blob.size;
+            const compressedSize = compressedArrayBuffer.byteLength;
             const compressionRatio = ((1 - compressedSize / originalSize) * 100).toFixed(1);
             
             // 更新状态
@@ -83,8 +97,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 `Compression complete! ${formatFileSize(originalSize)} → ${formatFileSize(compressedSize)} (${compressionRatio}% reduced)`
             );
             
-            // 自动下载文件
-            downloadBlob(blob, `compressed_${file.name}`);
+            // 下载文件
+            downloadBlob(compressedArrayBuffer, `compressed_${file.name}`);
             
             if (compressionStats) {
                 compressionStats.textContent = 
