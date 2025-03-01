@@ -2,6 +2,9 @@
 importScripts('/js/lib/pdf-lib.min.js');
 importScripts('/js/lib/comlink.min.js');
 
+// 服务器配置
+const SERVER_URL = 'http://localhost:3000';
+
 // PDF 内容分析器
 class PDFAnalyzer {
     async analyzePDF(pdfDoc) {
@@ -358,18 +361,47 @@ class EPUBCompressor {
 const compression = {
     async compressFile(file, compressionLevel) {
         try {
-            const arrayBuffer = await file.arrayBuffer();
+            // 创建 FormData
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('compressionLevel', compressionLevel);
 
-            if (file.name.toLowerCase().endsWith('.pdf')) {
-                const compressor = new HybridCompressionEngine(compressionLevel);
-                return await compressor.compressPDF(arrayBuffer);
-            } else if (file.name.toLowerCase().endsWith('.epub')) {
-                const compressor = new EPUBCompressor(compressionLevel);
-                return await compressor.compressEPUB(arrayBuffer);
-            } else {
-                throw new Error('不支持的文件类型');
+            // 发送压缩请求到服务器
+            const response = await fetch(`${SERVER_URL}/compress`, {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) {
+                throw new Error('服务器压缩失败');
             }
+
+            const result = await response.json();
+
+            if (!result.success) {
+                throw new Error(result.error || '压缩过程出错');
+            }
+
+            // 发送压缩统计信息
+            postMessage({
+                type: 'progress',
+                progress: 100,
+                message: `压缩完成！
+                原始大小: ${(result.stats.originalSize / 1024 / 1024).toFixed(2)} MB
+                压缩后大小: ${(result.stats.compressedSize / 1024 / 1024).toFixed(2)} MB
+                压缩率: ${result.stats.compressionRatio}%`
+            });
+
+            // 将Base64数据转换回Uint8Array
+            const binaryString = atob(result.data);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            return bytes;
+
         } catch (error) {
+            console.error('压缩失败:', error);
             throw error;
         }
     }
