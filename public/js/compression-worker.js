@@ -20,7 +20,6 @@ class PDFContentAnalyzer {
         const analysis = {
             pageCount: pdfDoc.getPageCount(),
             contentMap: new Map(),
-            metadata: await pdfDoc.getMetadata(),
             totalSize: 0,
             stats: {
                 imageCount: 0,
