@@ -1,11 +1,6 @@
 {
   "version": 2,
-  "buildCommand": "apt-get update && apt-get install -y ghostscript && npm install",
-  "build": {
-    "env": {
-      "GHOSTSCRIPT_PATH": "/opt/vercel/ghostscript/bin/gs"
-    }
-  },
+  "buildCommand": "npm install",
   "builds": [
     {
       "src": "server/server.js",

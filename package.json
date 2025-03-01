@@ -5,13 +5,13 @@
   "main": "server/server.js",
   "scripts": {
     "start": "node server/server.js",
+    "vercel-build": "npm install",
     "dev": "nodemon server/server.js"
   },
   "dependencies": {
     "adm-zip": "^0.5.16",
     "epub-parser": "^0.2.5",
     "express": "^4.21.2",
-    "ghostscript4js": "^3.2.3",
     "jimp": "^1.6.0",
     "multer": "^1.4.5-lts.1",
     "pdf-lib": "^1.17.1",

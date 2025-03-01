@@ -4,13 +4,12 @@ const path = require('path');
 const fs = require('fs');
 const { PDFDocument } = require('pdf-lib');
 const AdmZip = require('adm-zip');
-const gs = require('ghostscript4js');
 const EPub = require('epub-parser');
 const sharp = require('sharp');
 const Jimp = require('jimp');
 
 const app = express();
-let port = 3001;
+const port = process.env.PORT || 3000;
 
 // 设置静态文件目录
 app.use(express.static('public'));
@@ -40,113 +39,93 @@ const upload = multer({
     }
 });
 
-// 设置 Ghostscript 路径
-if (process.env.GHOSTSCRIPT_PATH) {
-    gs.setGhostscriptPath(process.env.GHOSTSCRIPT_PATH);
-}
-
-// 使用 Ghostscript 压缩 PDF
-async function compressPDFWithGhostscript(inputPath, outputPath, compressionLevel) {
+// 使用 pdf-lib 压缩 PDF
+async function compressPDF(inputPath, outputPath, compressionLevel) {
     try {
-        console.log('=== Starting Ghostscript PDF compression ===');
+        console.log('=== Starting PDF-Lib PDF compression ===');
         console.log('Compression level:', compressionLevel);
         
+        // 读取原始 PDF 文件
+        const pdfBytes = fs.readFileSync(inputPath);
+        const pdfDoc = await PDFDocument.load(pdfBytes);
+        
+        // 获取页面数量
+        const pageCount = pdfDoc.getPageCount();
+        console.log(`PDF has ${pageCount} pages`);
+        
         // 根据压缩级别设置不同的参数
-        let gsSettings;
-        switch (compressionLevel) {
-            case 'low':
-                gsSettings = {
-                    colorRes: '150',             // 与默认相同
-                    grayRes: '150',
-                    monoRes: '150',
-                    pdfSettings: '/printer',     // 使用打印质量
-                    extraArgs: [
-                        '-dDoThumbnails=false',  // 禁用缩略图
-                        '-dCompressFonts=false', // 不压缩字体
-                        '-dPreserveMarkedContent=true'  // 保留标记内容
-                    ]
-                };
-                break;
-            case 'medium':
-                gsSettings = {
-                    colorRes: '120',
-                    grayRes: '120',
-                    monoRes: '120',
-                    pdfSettings: '/ebook'
-                };
-                break;
-            case 'high':
-                gsSettings = {
-                    colorRes: '72',
-                    grayRes: '72',
-                    monoRes: '72',
-                    pdfSettings: '/screen'
-                };
-                break;
-            default:
-                gsSettings = {
-                    colorRes: '150',
-                    grayRes: '150',
-                    monoRes: '150',
-                    pdfSettings: '/ebook'
-                };
+        const compressionSettings = {
+            'low': {
+                imageQuality: 0.8,    // 图像质量 (0-1)
+                compressImages: true,  // 是否压缩图像
+                removeMetadata: false  // 是否移除元数据
+            },
+            'medium': {
+                imageQuality: 0.6,
+                compressImages: true,
+                removeMetadata: true
+            },
+            'high': {
+                imageQuality: 0.4,
+                compressImages: true,
+                removeMetadata: true
+            }
+        }[compressionLevel] || {
+            imageQuality: 0.6,
+            compressImages: true,
+            removeMetadata: true
+        };
+        
+        // 创建新的 PDF 文档
+        const newPdfDoc = await PDFDocument.create();
+        
+        // 复制所有页面到新文档
+        for (let i = 0; i < pageCount; i++) {
+            const [copiedPage] = await newPdfDoc.copyPages(pdfDoc, [i]);
+            newPdfDoc.addPage(copiedPage);
         }
-
-        // 使用绝对路径
-        const absoluteInputPath = path.resolve(inputPath);
-        const absoluteOutputPath = path.resolve(outputPath);
-
-        // 基本的 Ghostscript 参数
-        const gsArgs = [
-            '-q',
-            '-dNOPAUSE',
-            '-dBATCH',
-            '-dSAFER',
-            '-sDEVICE=pdfwrite',
-            '-dCompatibilityLevel=1.4',
-            `-dPDFSETTINGS=${gsSettings.pdfSettings}`,
-            '-dEmbedAllFonts=true',
-            '-dSubsetFonts=true',
-            '-dAutoRotatePages=/None',
-            `-dColorImageResolution=${gsSettings.colorRes}`,
-            `-dGrayImageResolution=${gsSettings.grayRes}`,
-            `-dMonoImageResolution=${gsSettings.monoRes}`,
-            ...(gsSettings.extraArgs || []),
-            `-sOutputFile=${absoluteOutputPath}`,
-            absoluteInputPath
-        ];
-
-        // 输出完整命令
-        console.log('Ghostscript command:', gsArgs.join(' '));
-
-        // 执行压缩
-        console.log('Compressing PDF with Ghostscript...');
-        await gs.execute(gsArgs);
-
+        
+        // 如果需要移除元数据
+        if (compressionSettings.removeMetadata) {
+            // 清除元数据
+            newPdfDoc.setTitle('');
+            newPdfDoc.setAuthor('');
+            newPdfDoc.setSubject('');
+            newPdfDoc.setKeywords([]);
+            newPdfDoc.setProducer('');
+            newPdfDoc.setCreator('');
+        }
+        
+        // 保存压缩后的 PDF
+        const compressedPdfBytes = await newPdfDoc.save({
+            // pdf-lib 的压缩选项
+            useObjectStreams: true,
+            addDefaultPage: false,
+            useCompression: true
+        });
+        
+        // 写入文件
+        fs.writeFileSync(outputPath, compressedPdfBytes);
+        
         // 验证输出文件
-        if (!fs.existsSync(absoluteOutputPath)) {
-            throw new Error(`Output file was not created: ${absoluteOutputPath}`);
+        if (!fs.existsSync(outputPath)) {
+            throw new Error(`Output file was not created: ${outputPath}`);
         }
-
-        const originalSize = fs.statSync(absoluteInputPath).size;
-        const compressedSize = fs.statSync(absoluteOutputPath).size;
+        
+        const originalSize = fs.statSync(inputPath).size;
+        const compressedSize = fs.statSync(outputPath).size;
         const compressionRatio = ((1 - compressedSize / originalSize) * 100).toFixed(2);
-
+        
         console.log('=== Compression Results ===');
         console.log('Original size:', originalSize, 'bytes');
         console.log('Compressed size:', compressedSize, 'bytes');
         console.log('Compression ratio:', compressionRatio + '%');
-
+        
         return true;
     } catch (error) {
-        console.error('Compression error:', error);
+        console.error('PDF compression error:', error);
         throw error;
     }
-}
-
-// 修改原来的 compressPDF 函数，使用新的压缩方法
-async function compressPDF(inputPath, outputPath, compressionLevel) {
-    return await compressPDFWithGhostscript(inputPath, outputPath, compressionLevel);
 }
 
 // EPUB 压缩函数
