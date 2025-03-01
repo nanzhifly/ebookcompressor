@@ -1,6 +1,6 @@
 // 导入必要的库
-importScripts('https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js');
-importScripts('https://unpkg.com/comlink@4.4.1/dist/umd/comlink.min.js');
+importScripts('/js/lib/pdf-lib.min.js');
+importScripts('/js/lib/comlink.min.js');
 
 // 压缩设置
 const compressionSettings = {

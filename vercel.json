@@ -16,6 +16,15 @@
   ],
   "routes": [
     {
+      "src": "/js/lib/(.*)",
+      "headers": {
+        "Content-Type": "text/javascript",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Cross-Origin-Embedder-Policy": "require-corp"
+      },
+      "dest": "/public/js/lib/$1"
+    },
+    {
       "src": "/js/compression-worker.js",
       "headers": {
         "Content-Type": "text/javascript",
