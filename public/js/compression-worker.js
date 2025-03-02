@@ -2,8 +2,7 @@
 importScripts('/js/vendor/comlink.min.js');
 importScripts('/js/vendor/jszip.min.js');
 importScripts('/js/vendor/browser-image-compression.js');
-importScripts('/js/vendor/clean-css.min.js');
-importScripts('/js/vendor/html-minifier.min.js');
+importScripts('/js/vendor/htmlminifier.min.js');
 
 // EPUB 压缩器
 class EPUBCompressor {
@@ -236,63 +235,68 @@ class EPUBCompressor {
             const totalFiles = epubStructure.html.length + epubStructure.css.length;
             let processedCount = 0;
 
-            // 初始化压缩器
-            const cssMinifier = new CleanCSS({
-                level: 2,
-                compatibility: '*'
-            });
-
             const htmlMinifier = HTMLMinifier.minify;
-            const htmlOptions = {
+            const minifierOptions = {
                 collapseBooleanAttributes: true,
                 collapseWhitespace: true,
                 decodeEntities: true,
                 html5: true,
-                minifyCSS: true,
+                minifyCSS: true,  // 使用内置的 CSS 压缩
                 minifyJS: true,
+                processConditionalComments: true,
                 removeComments: true,
                 removeEmptyAttributes: true,
+                removeOptionalTags: true,
                 removeRedundantAttributes: true,
                 removeScriptTypeAttributes: true,
                 removeStyleLinkTypeAttributes: true,
+                trimCustomFragments: true,
                 useShortDoctype: true
             };
 
             // 处理 CSS 文件
-            for (const css of epubStructure.css) {
+            for (const cssFile of epubStructure.css) {
                 try {
-                    const cssContent = css.data.toString('utf8');
-                    const minified = cssMinifier.minify(cssContent);
-                    
-                    if (minified.errors.length === 0) {
-                        tempDir.addFile(css.name, Buffer.from(minified.styles, 'utf8'));
-                    }
+                    const cssText = new TextDecoder().decode(cssFile.data);
+                    const minifiedCSS = htmlMinifier(cssText, {
+                        ...minifierOptions,
+                        minifyCSS: true
+                    });
+                    cssFile.data = new TextEncoder().encode(minifiedCSS).buffer;
 
                     processedCount++;
-                    this.updateProgress(60 + (processedCount / totalFiles) * 20, `处理 CSS 文件: ${css.name}`);
+                    this.updateProgress(
+                        60 + (processedCount / totalFiles) * 20,
+                        `处理 CSS 文件 ${processedCount}/${epubStructure.css.length}: ${cssFile.name}`
+                    );
                 } catch (error) {
-                    console.error(`CSS 压缩失败 ${css.name}:`, error);
+                    console.error(`处理 CSS 文件失败 ${cssFile.name}:`, error);
+                    // 如果处理失败，保留原文件
                     continue;
                 }
             }
 
             // 处理 HTML 文件
-            for (const html of epubStructure.html) {
+            for (const htmlFile of epubStructure.html) {
                 try {
-                    const htmlContent = html.data.toString('utf8');
-                    const minified = htmlMinifier(htmlContent, htmlOptions);
-                    
-                    tempDir.addFile(html.name, Buffer.from(minified, 'utf8'));
+                    const htmlText = new TextDecoder().decode(htmlFile.data);
+                    const minifiedHTML = htmlMinifier(htmlText, minifierOptions);
+                    htmlFile.data = new TextEncoder().encode(minifiedHTML).buffer;
 
                     processedCount++;
-                    this.updateProgress(60 + (processedCount / totalFiles) * 20, `处理 HTML 文件: ${html.name}`);
+                    this.updateProgress(
+                        60 + (processedCount / totalFiles) * 20,
+                        `处理 HTML 文件 ${processedCount - epubStructure.css.length}/${epubStructure.html.length}: ${htmlFile.name}`
+                    );
                 } catch (error) {
-                    console.error(`HTML 压缩失败 ${html.name}:`, error);
+                    console.error(`处理 HTML 文件失败 ${htmlFile.name}:`, error);
+                    // 如果处理失败，保留原文件
                     continue;
                 }
             }
 
-            this.updateProgress(80, 'HTML/CSS 处理完成，开始重新打包...');
+            this.updateProgress(80, 'HTML/CSS 处理完成，准备重新打包...');
+            return epubStructure;
 
         } catch (error) {
             console.error('HTML/CSS 处理过程失败:', error);
