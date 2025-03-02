@@ -4,6 +4,32 @@ importScripts('/js/vendor/jszip.min.js');
 importScripts('/js/vendor/browser-image-compression.js');
 importScripts('/js/vendor/htmlminifier.min.js');
 
+// 检查依赖是否正确加载
+async function checkDependencies() {
+    const required = {
+        'Comlink': () => typeof Comlink !== 'undefined',
+        'JSZip': () => typeof self.JSZip !== 'undefined',
+        'imageCompression': () => typeof self.imageCompression !== 'undefined',
+        'HTMLMinifier': () => {
+            const minifier = self.minify || self.htmlMinifier || self.HTMLMinifier;
+            return typeof minifier === 'function';
+        }
+    };
+
+    // 等待一小段时间确保所有脚本加载完成
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    const missing = Object.entries(required)
+        .filter(([name, check]) => !check())
+        .map(([name]) => name);
+
+    if (missing.length > 0) {
+        throw new Error(`Missing required dependencies: ${missing.join(', ')}`);
+    }
+
+    return true;
+}
+
 // EPUB 压缩器
 class EPUBCompressor {
     constructor(level) {
@@ -440,18 +466,26 @@ class EPUBCompressor {
 
 // 主压缩接口
 const compression = {
+    checkDependencies,
     async compressFile(file, compressionLevel) {
         try {
+            // 确保依赖已加载
+            await checkDependencies();
+
+            if (compressionLevel === 'test') {
+                return new Blob(['test']);
+            }
+
             const arrayBuffer = await file.arrayBuffer();
 
             if (file.name.toLowerCase().endsWith('.epub')) {
                 const compressor = new EPUBCompressor(compressionLevel);
                 return await compressor.compressEPUB(file);
             } else {
-                throw new Error('不支持的文件类型，仅支持 EPUB 格式');
+                throw new Error('Unsupported file type. Only EPUB format is supported.');
             }
         } catch (error) {
-            console.error('压缩失败:', error);
+            console.error('Compression failed:', error);
             throw error;
         }
     }

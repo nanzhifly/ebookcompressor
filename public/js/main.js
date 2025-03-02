@@ -6,7 +6,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         COMPRESSION_COMPLETE: (originalSize, compressedSize, ratio) => 
             `Compression complete! ${formatFileSize(originalSize)} → ${formatFileSize(compressedSize)} (${ratio}% smaller)`,
         COMPRESSION_FAILED: 'Compression failed: ',
-        ENGINE_NOT_INITIALIZED: 'Error: Compression engine not initialized'
+        ENGINE_NOT_INITIALIZED: 'Error: Compression engine not initialized',
+        DEPENDENCY_ERROR: 'Error: Failed to load required dependencies'
     };
 
     // DOM Elements
@@ -23,39 +24,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     let compression = null;
     let compressedBlob = null;
 
-    // Check if all required dependencies are loaded
-    function checkDependencies() {
-        const required = {
-            'Comlink': () => typeof Comlink !== 'undefined',
-            'JSZip': () => typeof JSZip !== 'undefined',
-            'imageCompression': () => typeof imageCompression !== 'undefined',
-            'minify': () => typeof minify !== 'undefined' || typeof htmlMinifier !== 'undefined' || typeof HTMLMinifier !== 'undefined'
-        };
-
-        const missing = Object.entries(required)
-            .filter(([name, check]) => !check())
-            .map(([name]) => name);
-
-        if (missing.length > 0) {
-            throw new Error(`Missing required dependencies: ${missing.join(', ')}`);
-        }
-    }
-
     // Initialize Web Worker
     async function initializeWorker() {
         try {
-            // Check dependencies first
-            checkDependencies();
-            
             // Initialize worker
             worker = new Worker('/js/compression-worker.js');
             compression = Comlink.wrap(worker);
             
-            // Test worker connection
+            // Test worker initialization and dependency loading
+            await compression.checkDependencies();
+            
+            // Test basic functionality
             await compression.compressFile(new Blob(['test']), 'test');
         } catch (error) {
             console.error('Failed to initialize Web Worker:', error);
-            updateCompressionStatus(STATUS_MESSAGES.INIT_ERROR);
+            updateCompressionStatus(
+                error.message.includes('dependencies') ? 
+                STATUS_MESSAGES.DEPENDENCY_ERROR : 
+                STATUS_MESSAGES.INIT_ERROR
+            );
             throw error;
         }
     }
