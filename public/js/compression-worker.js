@@ -1,9 +1,9 @@
 // 导入必要的库
-importScripts('https://unpkg.com/comlink/dist/umd/comlink.min.js');
-importScripts('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js');
-importScripts('https://unpkg.com/browser-image-compression@2.0.2/dist/browser-image-compression.js');
-importScripts('https://cdnjs.cloudflare.com/ajax/libs/clean-css/5.3.2/clean-css.min.js');
-importScripts('https://cdnjs.cloudflare.com/ajax/libs/html-minifier/4.0.0/htmlminifier.min.js');
+importScripts('/js/vendor/comlink.min.js');
+importScripts('/js/vendor/jszip.min.js');
+importScripts('/js/vendor/browser-image-compression.js');
+importScripts('/js/vendor/clean-css.min.js');
+importScripts('/js/vendor/html-minifier.min.js');
 
 // EPUB 压缩器
 class EPUBCompressor {
