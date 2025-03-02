@@ -119,7 +119,7 @@ class PDFContentAnalyzer {
             if (contents instanceof PDFLib.PDFArray) {
                 // 处理内容流数组
                 for (let i = 0; i < contents.size(); i++) {
-                    const stream = contents.lookup(i);
+                    const stream = contents.get(i);
                     if (stream instanceof PDFLib.PDFStream) {
                         totalSize += (await stream.sizeInBytes()) || 0;
                     }
@@ -396,7 +396,7 @@ class LayeredCompressionEngine {
             if (contents instanceof PDFLib.PDFArray) {
                 // 处理内容流数组
                 for (let i = 0; i < contents.size(); i++) {
-                    const stream = contents.lookup(i);
+                    const stream = contents.get(i);
                     if (stream instanceof PDFLib.PDFStream) {
                         await this.processContentStream(stream, strategy);
                     }
@@ -416,19 +416,19 @@ class LayeredCompressionEngine {
 
             // 获取原始数据
             const data = await stream.access();
-            if (!data) return;
+            if (!data || !data.length) return;
 
             // 应用压缩
             const compressed = PDFLib.deflate(data, strategy.level);
             
             // 更新流数据
             await stream.setData(compressed);
-            
-            // 设置压缩过滤器
-            stream.dict.set(PDFLib.PDFName.of('Filter'), PDFLib.PDFName.of('FlateDecode'));
-            
+
+            // 设置适当的过滤器
+            stream.setFilters([PDFLib.PDFName.of('FlateDecode')]);
+
         } catch (error) {
-            console.error('压缩内容流失败:', error);
+            console.error('处理内容流失败:', error);
         }
     }
 
