@@ -1,9 +1,9 @@
 // 导入必要的库
-importScripts('/js/lib/comlink.min.js');
-importScripts('/js/lib/adm-zip.min.js');
-importScripts('/js/lib/sharp.min.js');
-importScripts('/js/lib/clean-css.min.js');
-importScripts('/js/lib/html-minifier.min.js');
+importScripts('https://unpkg.com/comlink/dist/umd/comlink.min.js');
+importScripts('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js');
+importScripts('https://unpkg.com/browser-image-compression@2.0.2/dist/browser-image-compression.js');
+importScripts('https://cdnjs.cloudflare.com/ajax/libs/clean-css/5.3.2/clean-css.min.js');
+importScripts('https://cdnjs.cloudflare.com/ajax/libs/html-minifier/4.0.0/htmlminifier.min.js');
 
 // EPUB 压缩器
 class EPUBCompressor {
@@ -54,7 +54,7 @@ class EPUBCompressor {
             const tempDir = await this.createTempDirectory();
             
             // 解压 EPUB
-            const epubStructure = await this.extractEPUB(arrayBuffer, tempDir);
+            const epubStructure = await this.extractEPUB(arrayBuffer);
             
             this.updateProgress(20, 'EPUB 文件解压完成，开始处理图片...');
             
@@ -103,17 +103,17 @@ class EPUBCompressor {
         };
     }
 
-    async extractEPUB(arrayBuffer, tempDir) {
+    async extractEPUB(arrayBuffer) {
         try {
             this.updateProgress(0, '正在读取 EPUB 文件...');
             
-            // 读取文件内容
-            const zip = new AdmZip(Buffer.from(arrayBuffer));
+            // 使用 JSZip 替代 AdmZip
+            const zip = new JSZip();
+            await zip.loadAsync(arrayBuffer);
             
             this.updateProgress(20, '正在解析 EPUB 结构...');
             
             // 创建临时目录结构
-            const entries = zip.getEntries();
             const epubStructure = {
                 images: [],
                 html: [],
@@ -124,9 +124,11 @@ class EPUBCompressor {
             };
             
             // 解析文件结构
-            for (const entry of entries) {
-                const fileName = entry.entryName;
-                const fileContent = entry.getData();
+            for (const [fileName, file] of Object.entries(zip.files)) {
+                if (file.dir) continue;
+                
+                // 获取文件内容
+                const fileContent = await file.async('arraybuffer');
                 
                 // 根据文件类型分类
                 if (/\.(jpe?g|png|gif|webp)$/i.test(fileName)) {
@@ -163,84 +165,25 @@ class EPUBCompressor {
             for (const image of epubStructure.images) {
                 try {
                     // 获取原始图片数据
-                    const imageBuffer = image.data;
-                    if (!imageBuffer) continue;
+                    const imageFile = new File([image.data], image.name, {
+                        type: this.getImageMimeType(image.name)
+                    });
 
-                    // 创建 sharp 实例
-                    let sharpInstance = sharp(imageBuffer);
+                    // 设置压缩选项
+                    const options = {
+                        maxSizeMB: 1,
+                        maxWidthOrHeight: Math.max(
+                            800 * strategy.imageScale,
+                            400
+                        ),
+                        useWebWorker: true,
+                        fileType: this.getImageFormat(image.name),
+                        initialQuality: strategy.imageQuality
+                    };
 
-                    // 获取图片信息
-                    const metadata = await sharpInstance.metadata();
-                    
-                    // 计算新的尺寸
-                    const newWidth = Math.round(metadata.width * strategy.imageScale);
-                    const newHeight = Math.round(metadata.height * strategy.imageScale);
-
-                    // 应用压缩策略
-                    sharpInstance = sharpInstance
-                        .resize(newWidth, newHeight, {
-                            fit: 'inside',  // 保持宽高比
-                            withoutEnlargement: true  // 避免放大小图片
-                        });
-
-                    // 如果需要转换为灰度
-                    if (strategy.convertToGrayscale) {
-                        sharpInstance = sharpInstance.grayscale();
-                    }
-
-                    // 根据文件类型应用不同的压缩选项
-                    const ext = image.name.toLowerCase().split('.').pop();
-                    let compressedBuffer;
-
-                    switch (ext) {
-                        case 'jpg':
-                        case 'jpeg':
-                            compressedBuffer = await sharpInstance
-                                .jpeg({
-                                    quality: Math.round(strategy.imageQuality * 100),
-                                    mozjpeg: true,  // 使用 mozjpeg 优化
-                                    progressive: true  // 使用渐进式加载
-                                })
-                                .toBuffer();
-                            break;
-                        case 'png':
-                            compressedBuffer = await sharpInstance
-                                .png({
-                                    quality: Math.round(strategy.imageQuality * 100),
-                                    compressionLevel: 9,  // 最高压缩级别
-                                    palette: true,  // 使用调色板优化
-                                    colors: 256  // 限制颜色数量
-                                })
-                                .toBuffer();
-                            break;
-                        case 'webp':
-                            compressedBuffer = await sharpInstance
-                                .webp({
-                                    quality: Math.round(strategy.imageQuality * 100),
-                                    effort: 6,  // 最高压缩努力级别
-                                    lossless: false  // 使用有损压缩
-                                })
-                                .toBuffer();
-                            break;
-                        case 'gif':
-                            // GIF 文件特殊处理
-                            if (metadata.pages && metadata.pages > 1) {
-                                // 动态 GIF,保持原样以维持动画效果
-                                compressedBuffer = imageBuffer;
-                            } else {
-                                // 静态 GIF,转换为 PNG
-                                compressedBuffer = await sharpInstance
-                                    .png({
-                                        quality: Math.round(strategy.imageQuality * 100),
-                                        compressionLevel: 9
-                                    })
-                                    .toBuffer();
-                            }
-                            break;
-                        default:
-                            // 对于其他格式，保持原样
-                            compressedBuffer = imageBuffer;
-                    }
+                    // 压缩图片
+                    const compressedFile = await imageCompression(imageFile, options);
+                    const compressedBuffer = await compressedFile.arrayBuffer();
 
                     // 更新图片数据
                     image.data = compressedBuffer;
@@ -266,6 +209,25 @@ class EPUBCompressor {
             console.error('图片处理过程失败:', error);
             throw error;
         }
+    }
+
+    // 获取图片 MIME 类型
+    getImageMimeType(filename) {
+        const ext = filename.toLowerCase().split('.').pop();
+        const mimeTypes = {
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
+            'png': 'image/png',
+            'gif': 'image/gif',
+            'webp': 'image/webp'
+        };
+        return mimeTypes[ext] || 'application/octet-stream';
+    }
+
+    // 获取图片格式
+    getImageFormat(filename) {
+        const ext = filename.toLowerCase().split('.').pop();
+        return ext === 'jpg' ? 'jpeg' : ext;
     }
 
     async processHTMLAndCSS(tempDir, epubStructure) {
@@ -341,12 +303,12 @@ class EPUBCompressor {
     async repackEPUB(tempDir, epubStructure) {
         try {
             // 创建新的 ZIP 文件
-            const zip = new AdmZip();
+            const zip = new JSZip();
 
             // 添加 mimetype 文件（如果存在）
             // mimetype 必须是第一个文件，且不能被压缩
             if (tempDir.getFile('mimetype')) {
-                zip.addFile('mimetype', tempDir.getFile('mimetype'), '', 0);
+                zip.file('mimetype', tempDir.getFile('mimetype'), '');
             }
 
             // 添加所有其他文件
@@ -357,12 +319,12 @@ class EPUBCompressor {
                 const content = tempDir.getFile(filePath);
                 if (content) {
                     // 使用标准压缩级别
-                    zip.addFile(filePath, content);
+                    zip.file(filePath, content);
                 }
             }
 
             // 生成最终的 EPUB 文件
-            const finalBuffer = zip.toBuffer();
+            const finalBuffer = await zip.generateAsync({ type: 'nodebuffer' });
 
             this.updateProgress(100, 'EPUB 打包完成！');
 
