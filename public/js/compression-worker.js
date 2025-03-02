@@ -44,30 +44,60 @@ class EPUBCompressor {
         postMessage({ type: 'progress', progress, status });
     }
 
-    async compressEPUB(arrayBuffer) {
+    async compressEPUB(file) {
         try {
-            // 发送开始压缩的消息
-            this.updateProgress(0, '开始处理 EPUB 文件...');
+            // 创建新的 JSZip 实例
+            const zip = new self.JSZip();
+            
+            // 读取原始 EPUB 文件
+            const epubData = await file.arrayBuffer();
+            
+            // 加载 EPUB 文件到 JSZip
+            const originalZip = await self.JSZip.loadAsync(epubData);
+            
+            // 创建新的压缩后的 EPUB
+            const compressedZip = new self.JSZip();
+            
+            // 遍历并处理所有文件
+            for (const [path, file] of Object.entries(originalZip.files)) {
+                if (file.dir) {
+                    compressedZip.folder(path);
+                    continue;
+                }
 
-            // 创建临时目录
-            const tempDir = await this.createTempDirectory();
+                // 获取文件内容
+                const content = await file.async('arraybuffer');
+                
+                // 根据文件类型进行不同的压缩处理
+                if (this.isImageFile(path)) {
+                    // 压缩图片
+                    const compressedImage = await this.compressImage(new Blob([content]));
+                    const compressedBuffer = await compressedImage.arrayBuffer();
+                    compressedZip.file(path, compressedBuffer);
+                } else if (this.isHTMLFile(path)) {
+                    // 压缩 HTML
+                    const htmlText = await file.async('text');
+                    const minifiedHTML = await this.minifyHTML(htmlText);
+                    compressedZip.file(path, minifiedHTML);
+                } else if (this.isCSSFile(path)) {
+                    // 压缩 CSS
+                    const cssText = await file.async('text');
+                    const minifiedCSS = await this.minifyCSS(cssText);
+                    compressedZip.file(path, minifiedCSS);
+                } else {
+                    // 其他文件直接复制
+                    compressedZip.file(path, content);
+                }
+            }
             
-            // 解压 EPUB
-            const epubStructure = await this.extractEPUB(arrayBuffer);
-            
-            this.updateProgress(20, 'EPUB 文件解压完成，开始处理图片...');
-            
-            // 处理图片
-            await this.processImages(epubStructure);
-            
-            // 处理 HTML/CSS
-            await this.processHTMLAndCSS(tempDir, epubStructure);
-            
-            // 重新打包
-            const compressedEPUB = await this.repackEPUB(tempDir, epubStructure);
-            
-            // 清理临时文件
-            await this.cleanup(tempDir);
+            // 生成压缩后的 EPUB 文件
+            const compressedEPUB = await compressedZip.generateAsync({
+                type: 'blob',
+                compression: 'DEFLATE',
+                compressionOptions: {
+                    level: 9
+                }
+            });
             
             return compressedEPUB;
         } catch (error) {
@@ -175,13 +205,13 @@ class EPUBCompressor {
                             800 * strategy.imageScale,
                             400
                         ),
-                        useWebWorker: true,
+                        useWebWorker: false,
                         fileType: this.getImageFormat(image.name),
                         initialQuality: strategy.imageQuality
                     };
 
                     // 压缩图片
-                    const compressedFile = await imageCompression(imageFile, options);
+                    const compressedFile = await self.imageCompression(imageFile, options);
                     const compressedBuffer = await compressedFile.arrayBuffer();
 
                     // 更新图片数据
@@ -235,7 +265,12 @@ class EPUBCompressor {
             const totalFiles = epubStructure.html.length + epubStructure.css.length;
             let processedCount = 0;
 
-            const htmlMinifier = HTMLMinifier.minify;
+            // 检查压缩器是否可用
+            if (typeof window.HTMLMinifier === 'undefined') {
+                console.warn('HTML/CSS 压缩器未正确加载，将保持原始文件');
+                return epubStructure;
+            }
+
             const minifierOptions = {
                 collapseBooleanAttributes: true,
                 collapseWhitespace: true,
@@ -258,9 +293,11 @@ class EPUBCompressor {
             for (const cssFile of epubStructure.css) {
                 try {
                     const cssText = new TextDecoder().decode(cssFile.data);
-                    const minifiedCSS = htmlMinifier(cssText, {
-                        ...minifierOptions,
-                        minifyCSS: true
+                    // 对于 CSS 文件，使用特殊的选项
+                    const minifiedCSS = window.HTMLMinifier.minify(cssText, {
+                        minifyCSS: true,
+                        removeComments: true,
+                        collapseWhitespace: true
                     });
                     cssFile.data = new TextEncoder().encode(minifiedCSS).buffer;
 
@@ -280,7 +317,7 @@ class EPUBCompressor {
             for (const htmlFile of epubStructure.html) {
                 try {
                     const htmlText = new TextDecoder().decode(htmlFile.data);
-                    const minifiedHTML = htmlMinifier(htmlText, minifierOptions);
+                    const minifiedHTML = window.HTMLMinifier.minify(htmlText, minifierOptions);
                     htmlFile.data = new TextEncoder().encode(minifiedHTML).buffer;
 
                     processedCount++;
@@ -300,7 +337,8 @@ class EPUBCompressor {
 
         } catch (error) {
             console.error('HTML/CSS 处理过程失败:', error);
-            throw error;
+            // 如果整个处理过程失败，返回未修改的结构
+            return epubStructure;
         }
     }
 
@@ -348,6 +386,54 @@ class EPUBCompressor {
         this.progress = 0;
         this.status = '已完成';
     }
+
+    async minifyCSS(cssText) {
+        // 检查 HTMLMinifier 是否可用
+        if (typeof self.HTMLMinifier === 'undefined') {
+            console.warn('HTMLMinifier 未加载，跳过 CSS 压缩');
+            return cssText;
+        }
+
+        try {
+            const minifiedCSS = self.HTMLMinifier.minify(cssText, {
+                collapseWhitespace: true,
+                removeComments: true,
+                minifyCSS: true
+            });
+            return minifiedCSS;
+        } catch (error) {
+            console.error('CSS 压缩失败:', error);
+            return cssText;
+        }
+    }
+
+    async minifyHTML(htmlText) {
+        // 检查 HTMLMinifier 是否可用
+        if (typeof self.HTMLMinifier === 'undefined') {
+            console.warn('HTMLMinifier 未加载，跳过 HTML 压缩');
+            return htmlText;
+        }
+
+        const minifierOptions = {
+            collapseWhitespace: true,
+            conservativeCollapse: true,
+            removeComments: true,
+            removeEmptyAttributes: true,
+            removeRedundantAttributes: true,
+            removeScriptTypeAttributes: true,
+            removeStyleLinkTypeAttributes: true,
+            minifyCSS: true,
+            minifyJS: true
+        };
+
+        try {
+            const minifiedHTML = self.HTMLMinifier.minify(htmlText, minifierOptions);
+            return minifiedHTML;
+        } catch (error) {
+            console.error('HTML 压缩失败:', error);
+            return htmlText;
+        }
+    }
 }
 
 // 主压缩接口
@@ -358,7 +444,7 @@ const compression = {
 
             if (file.name.toLowerCase().endsWith('.epub')) {
                 const compressor = new EPUBCompressor(compressionLevel);
-                return await compressor.compressEPUB(arrayBuffer);
+                return await compressor.compressEPUB(file);
             } else {
                 throw new Error('不支持的文件类型，仅支持 EPUB 格式');
             }

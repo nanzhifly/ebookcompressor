@@ -16,13 +16,13 @@
 
         <!-- 上传区域 -->
         <div class="upload-area" id="dropZone">
-            <input type="file" id="fileInput" accept=".pdf,.epub" hidden>
+            <input type="file" id="fileInput" accept=".epub" hidden>
             <div class="upload-content">
                 <svg class="upload-icon" viewBox="0 0 24 24" width="48" height="48">
                     <path d="M12 3L20 13H4L12 3M12 6L7.8 11H16.2L12 6M4 15H20V19H4V15Z"/>
                 </svg>
                 <p>Drag & drop your e-book here<br>or <span class="browse-text">browse files</span></p>
-                <p class="supported-formats">Supported formats: PDF, EPUB</p>
+                <p class="supported-formats">Supported format: EPUB</p>
                 <p class="file-info" id="fileInfo"></p>
             </div>
         </div>
@@ -34,17 +34,17 @@
                 <label class="option">
                     <input type="radio" name="compression" value="low">
                     <span class="option-text">Low</span>
-                    <span class="option-desc">Best quality, larger file size</span>
+                    <span class="option-desc">Best quality (80% quality, original size)</span>
                 </label>
                 <label class="option">
                     <input type="radio" name="compression" value="medium" checked>
                     <span class="option-text">Medium</span>
-                    <span class="option-desc">Balanced quality and size</span>
+                    <span class="option-desc">Balanced (50% quality, 75% size)</span>
                 </label>
                 <label class="option">
                     <input type="radio" name="compression" value="high">
                     <span class="option-text">High</span>
-                    <span class="option-desc">Smallest file size</span>
+                    <span class="option-desc">Smallest size (30% quality, 50% size, grayscale)</span>
                 </label>
             </div>
         </div>
