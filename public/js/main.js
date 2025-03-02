@@ -25,8 +25,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Check if all required dependencies are loaded
     function checkDependencies() {
-        const required = ['Comlink', 'JSZip', 'imageCompression', 'HTMLMinifier'];
-        const missing = required.filter(dep => typeof window[dep] === 'undefined');
+        const required = {
+            'Comlink': () => typeof Comlink !== 'undefined',
+            'JSZip': () => typeof JSZip !== 'undefined',
+            'imageCompression': () => typeof imageCompression !== 'undefined',
+            'minify': () => typeof minify !== 'undefined' || typeof htmlMinifier !== 'undefined' || typeof HTMLMinifier !== 'undefined'
+        };
+
+        const missing = Object.entries(required)
+            .filter(([name, check]) => !check())
+            .map(([name]) => name);
+
         if (missing.length > 0) {
             throw new Error(`Missing required dependencies: ${missing.join(', ')}`);
         }

@@ -389,28 +389,30 @@ class EPUBCompressor {
 
     async minifyCSS(cssText) {
         // 检查 HTMLMinifier 是否可用
-        if (typeof self.HTMLMinifier === 'undefined') {
-            console.warn('HTMLMinifier 未加载，跳过 CSS 压缩');
+        const minifier = self.minify || self.htmlMinifier || self.HTMLMinifier;
+        if (!minifier) {
+            console.warn('HTML Minifier not loaded, skipping CSS compression');
             return cssText;
         }
 
         try {
-            const minifiedCSS = self.HTMLMinifier.minify(cssText, {
+            const minifiedCSS = minifier(cssText, {
                 collapseWhitespace: true,
                 removeComments: true,
                 minifyCSS: true
             });
             return minifiedCSS;
         } catch (error) {
-            console.error('CSS 压缩失败:', error);
+            console.error('CSS compression failed:', error);
             return cssText;
         }
     }
 
     async minifyHTML(htmlText) {
         // 检查 HTMLMinifier 是否可用
-        if (typeof self.HTMLMinifier === 'undefined') {
-            console.warn('HTMLMinifier 未加载，跳过 HTML 压缩');
+        const minifier = self.minify || self.htmlMinifier || self.HTMLMinifier;
+        if (!minifier) {
+            console.warn('HTML Minifier not loaded, skipping HTML compression');
             return htmlText;
         }
 
@@ -427,10 +429,10 @@ class EPUBCompressor {
         };
 
         try {
-            const minifiedHTML = self.HTMLMinifier.minify(htmlText, minifierOptions);
+            const minifiedHTML = minifier(htmlText, minifierOptions);
             return minifiedHTML;
         } catch (error) {
-            console.error('HTML 压缩失败:', error);
+            console.error('HTML compression failed:', error);
             return htmlText;
         }
     }
