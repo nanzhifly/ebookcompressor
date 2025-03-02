@@ -115,12 +115,21 @@ class PDFContentAnalyzer {
 
     async analyzeContentStream(contents) {
         let totalSize = 0;
-        if (Array.isArray(contents)) {
-            for (const content of contents) {
-                totalSize += (await content.getContents())?.length || 0;
+        try {
+            if (contents instanceof PDFLib.PDFArray) {
+                // 处理内容流数组
+                for (let i = 0; i < contents.size(); i++) {
+                    const stream = contents.lookup(i);
+                    if (stream instanceof PDFLib.PDFStream) {
+                        totalSize += (await stream.sizeInBytes()) || 0;
+                    }
+                }
+            } else if (contents instanceof PDFLib.PDFStream) {
+                // 处理单个内容流
+                totalSize = (await contents.sizeInBytes()) || 0;
             }
-        } else {
-            totalSize = (await contents?.getContents())?.length || 0;
+        } catch (error) {
+            console.error('分析内容流失败:', error);
         }
         return { size: totalSize };
     }
@@ -384,28 +393,42 @@ class LayeredCompressionEngine {
     async processContents(contents) {
         const strategy = this.strategyManager.getTextStrategy();
         try {
-            if (Array.isArray(contents)) {
-                for (const content of contents) {
-                    await this.processContentStream(content, strategy);
+            if (contents instanceof PDFLib.PDFArray) {
+                // 处理内容流数组
+                for (let i = 0; i < contents.size(); i++) {
+                    const stream = contents.lookup(i);
+                    if (stream instanceof PDFLib.PDFStream) {
+                        await this.processContentStream(stream, strategy);
+                    }
                 }
-            } else {
+            } else if (contents instanceof PDFLib.PDFStream) {
+                // 处理单个内容流
                 await this.processContentStream(contents, strategy);
             }
         } catch (error) {
-            console.error('内容流处理失败:', error);
+            console.error('处理内容流失败:', error);
         }
     }
 
-    async processContentStream(content, strategy) {
+    async processContentStream(stream, strategy) {
         try {
-            if (!content) return;
-            const data = await content.getContents();
-            if (data) {
-                const processed = PDFLib.deflate(data, strategy.level);
-                content.setContent(processed);
-            }
+            if (!(stream instanceof PDFLib.PDFStream)) return;
+
+            // 获取原始数据
+            const data = await stream.access();
+            if (!data) return;
+
+            // 应用压缩
+            const compressed = PDFLib.deflate(data, strategy.level);
+            
+            // 更新流数据
+            await stream.setData(compressed);
+            
+            // 设置压缩过滤器
+            stream.dict.set(PDFLib.PDFName.of('Filter'), PDFLib.PDFName.of('FlateDecode'));
+            
         } catch (error) {
-            console.error('内容流压缩失败:', error);
+            console.error('压缩内容流失败:', error);
         }
     }
 
