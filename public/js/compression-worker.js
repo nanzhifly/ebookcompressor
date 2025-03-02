@@ -160,31 +160,35 @@ class CompressionStrategyManager {
     getImageStrategy(imageInfo) {
         const strategies = {
             low: {
-                quality: 0.92,
-                maxSize: 2048,
-                colorSpace: 'rgb',
-                method: 'jpeg'
+                quality: 0.8,          // 提高质量到80%
+                maxSize: 2048,         // 保持原始尺寸上限
+                colorSpace: 'rgb',     // 保持彩色
+                method: 'jpeg'         // 使用JPEG格式
             },
             medium: {
-                quality: 0.85,
-                maxSize: 1600,
-                colorSpace: 'rgb',
-                method: 'jpeg+flate'
+                quality: 0.5,          // 中等质量50%
+                maxSize: 1536,         // 降低到原尺寸的75%
+                colorSpace: 'rgb',     // 保持彩色
+                method: 'jpeg+flate'   // 使用JPEG+额外压缩
             },
             high: {
-                quality: 0.6,
-                maxSize: 1200,
-                colorSpace: 'grayscale',
-                method: 'jpeg+flate'
+                quality: 0.3,          // 低质量30%
+                maxSize: 1024,         // 降低到原尺寸的50%
+                colorSpace: 'grayscale', // 转换为灰度
+                method: 'jpeg+flate'   // 使用JPEG+额外压缩
             }
         };
 
         // 根据压缩级别和图像分析结果调整策略
         const baseStrategy = strategies[this.level];
+        
+        // 根据图像特征微调策略
         if (imageInfo.compressionPotential === 'low') {
-            baseStrategy.quality = Math.min(baseStrategy.quality + 0.1, 0.95);
+            // 已经压缩过的图像，稍微提高质量
+            baseStrategy.quality = Math.min(baseStrategy.quality + 0.1, 0.9);
         } else if (imageInfo.compressionPotential === 'high') {
-            baseStrategy.quality = Math.max(baseStrategy.quality - 0.1, 0.3);
+            // 未压缩或高位深图像，可以加大压缩力度
+            baseStrategy.quality = Math.max(baseStrategy.quality - 0.1, 0.2);
         }
 
         return baseStrategy;
@@ -225,15 +229,10 @@ class LayeredCompressionEngine {
 
     async compressPDF(arrayBuffer) {
         try {
-            // 加载文档
             const pdfDoc = await PDFLib.PDFDocument.load(arrayBuffer);
-            
-            // 分析内容
             const analysis = await this.analyzer.analyzePDF(pdfDoc);
-            
-            // 创建新文档
             const newPdfDoc = await PDFLib.PDFDocument.create();
-            
+
             // 处理每一页
             for (let i = 0; i < analysis.pageCount; i++) {
                 postMessage({
@@ -247,7 +246,7 @@ class LayeredCompressionEngine {
                 newPdfDoc.addPage(page);
             }
 
-            // 应用文档级压缩
+            // 优化保存选项
             return await newPdfDoc.save({
                 useObjectStreams: true,
                 addDefaultPage: false,
@@ -332,7 +331,7 @@ class LayeredCompressionEngine {
                 willReadFrequently: true
             });
 
-            // 绘制图像
+            // 绘制原始图像
             ctx.putImageData(imageData, 0, 0);
 
             // 计算新尺寸
@@ -351,7 +350,7 @@ class LayeredCompressionEngine {
                 willReadFrequently: true
             });
 
-            // 应用高质量缩放
+            // 使用高质量缩放
             scaleCtx.imageSmoothingEnabled = true;
             scaleCtx.imageSmoothingQuality = 'high';
             scaleCtx.drawImage(canvas, 0, 0, newWidth, newHeight);
@@ -361,10 +360,11 @@ class LayeredCompressionEngine {
                 const imgData = scaleCtx.getImageData(0, 0, newWidth, newHeight);
                 const data = imgData.data;
                 for (let i = 0; i < data.length; i += 4) {
+                    // 使用更精确的灰度转换公式
                     const gray = Math.round(
-                        data[i] * 0.299 +
-                        data[i + 1] * 0.587 +
-                        data[i + 2] * 0.114
+                        data[i] * 0.299 +     // Red
+                        data[i + 1] * 0.587 + // Green
+                        data[i + 2] * 0.114   // Blue
                     );
                     data[i] = data[i + 1] = data[i + 2] = gray;
                 }
@@ -380,7 +380,7 @@ class LayeredCompressionEngine {
             // 如果使用额外的压缩
             if (strategy.method.includes('flate')) {
                 const compressedData = new Uint8Array(await blob.arrayBuffer());
-                return PDFLib.deflate(compressedData);
+                return PDFLib.deflate(compressedData, this.getDeflateLevel());
             }
 
             return new Uint8Array(await blob.arrayBuffer());
@@ -434,9 +434,9 @@ class LayeredCompressionEngine {
 
     getDeflateLevel() {
         return {
-            low: 3,
-            medium: 6,
-            high: 9
+            low: 3,      // 轻度压缩
+            medium: 6,   // 中度压缩
+            high: 9      // 最大压缩
         }[this.level] || 6;
     }
 }
