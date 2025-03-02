@@ -55,13 +55,18 @@
         <!-- 压缩结果 -->
         <div class="compression-result">
             <div class="compression-status"></div>
-            <p id="compressionStats" class="compression-stats"></p>
+            <div class="compression-stats" id="compressionStats"></div>
             <a href="#" class="download-button">Download Compressed File</a>
         </div>
     </div>
 
-    <!-- 添加 Comlink 库 -->
-    <script src="/js/lib/comlink.min.js"></script>
+    <!-- Load dependencies -->
+    <script src="/js/vendor/jszip.min.js"></script>
+    <script src="/js/vendor/browser-image-compression.js"></script>
+    <script src="/js/vendor/htmlminifier.min.js"></script>
+    <script src="/js/vendor/comlink.min.js"></script>
+    
+    <!-- Load main application code -->
     <script src="js/main.js"></script>
 </body>
 </html> 
